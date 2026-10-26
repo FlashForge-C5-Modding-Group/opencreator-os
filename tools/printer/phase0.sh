@@ -1,24 +1,26 @@
 #!/bin/sh
-# Phase 0: read-only fact capture and eMMC backup on a stock Creator 5 Pro.
-# Runs on the printer (busybox sh) as root. Nothing on the eMMC is written.
+# Phase 0: read-only fact capture (and optional eMMC backup) on a stock
+# Creator 5 Pro. Runs on the printer (busybox sh) as root. Nothing on the
+# eMMC is written.
 #
-#   sh /path/on/stick/phase0.sh [--facts-only] [--all] [--out DIR]
+#   sh /path/on/stick/phase0.sh [--backup] [--all] [--out DIR]
 #
 # Output goes to $(dirname $0)/phase0, i.e. next to this script on the USB
-# stick (FAT32 is fine; large partitions are split into 1 GiB chunks
-# NAME.img.000, .001, ...). --out DIR overrides it.
-# --facts-only skip the partition backup
-# --all        also back up userdata (/usr/data); off by default
+# stick. --out DIR overrides it.
+# --backup  also back up kernel, rootfs, kernel2, rootfs2, rtos, ota and
+#           usershare (large partitions split into 1 GiB chunks
+#           NAME.img.000, .001, ... so FAT32 works); off by default
+# --all     with --backup, also back up userdata (/usr/data)
 #
 # Copy the phase0 directory to the PC afterwards and run
 # tools/verify-backup.sh on it.
 set -u
 
 OUT=$(dirname $0)/phase0
-BACKUP=1 ALL=0
+BACKUP=0 ALL=0
 while [ $# -gt 0 ]; do
 	case $1 in
-	--facts-only) BACKUP=0 ;;
+	--backup) BACKUP=1 ;;
 	--all) ALL=1 ;;
 	--out) OUT=${2:?--out needs a directory}; shift ;;
 	*) echo "unknown option $1" >&2; exit 2 ;;
