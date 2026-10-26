@@ -1,0 +1,20 @@
+#!/bin/sh
+# shellcheck disable=SC1091
+#
+# Ethernet (best effort, the board may have no PHY) is "lan" with DHCP.
+# The Wi-Fi client network "wwan" has no device of its own, so config_generate
+# would skip it here; /usr/libexec/c5-wifi-sta creates it with the STA iface.
+
+. /lib/functions/uci-defaults.sh
+
+board_config_update
+
+case "$(board_name)" in
+flashforge,creator5pro)
+	ucidef_set_interface "lan" device "eth0" protocol "dhcp"
+	;;
+esac
+
+board_config_flush
+
+exit 0

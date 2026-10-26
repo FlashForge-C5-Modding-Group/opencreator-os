@@ -1,0 +1,35 @@
+#!/bin/sh
+# shellcheck disable=SC1091
+# Mount the stock userdata partition (stock /usr/data) at /data, with fsck.
+#
+# Runs before fstools' 10-fstab ("10-c5..." sorts first); because this creates
+# /etc/config/fstab, 10-fstab's 'block detect' is skipped, so the global
+# section is written here as well.
+
+. /lib/c5/slot.sh
+
+dev=$(c5_part_dev userdata) || exit 0
+
+[ -f /etc/config/fstab ] || touch /etc/config/fstab
+
+uci -q get fstab.@global[0] >/dev/null || uci -q batch <<EOF
+add fstab global
+set fstab.@global[-1].anon_swap='0'
+set fstab.@global[-1].anon_mount='0'
+set fstab.@global[-1].auto_swap='1'
+set fstab.@global[-1].auto_mount='1'
+set fstab.@global[-1].delay_root='5'
+set fstab.@global[-1].check_fs='1'
+EOF
+
+uci -q batch <<EOF
+set fstab.data=mount
+set fstab.data.device='$dev'
+set fstab.data.target='/data'
+set fstab.data.fstype='ext4'
+set fstab.data.options='rw,noatime'
+set fstab.data.enabled='1'
+commit fstab
+EOF
+
+exit 0

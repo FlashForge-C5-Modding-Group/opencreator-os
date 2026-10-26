@@ -1,0 +1,103 @@
+#!/bin/sh
+# shellcheck disable=SC1091,SC3043
+#
+# c5-restore-stock [--dry-run] [--reboot] [DIR]
+#
+# Rewrite the stock kernel and rootfs saved by the installer (default DIR
+# /data/opencreator-os/stock: kernel.img, rootfs.squashfs, SHA256SUMS) into
+# the slot this system is NOT running from (the stock slot). --reboot then
+# points the boot flag at that slot and reboots. The last line printed is
+# "restore: OK..." or "restore: FAILED <why>".
+
+. /lib/c5/slot.sh
+
+DRY=0
+REBOOT=0
+DIR=/data/opencreator-os/stock
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--dry-run) DRY=1 ;;
+		--reboot) REBOOT=1 ;;
+		-h|--help)
+			sed -n '4,10s/^# \{0,1\}//p' "$0"
+			exit 0
+			;;
+		-*) echo "restore: FAILED unknown option $1"; exit 2 ;;
+		*) DIR=$1 ;;
+	esac
+	shift
+done
+
+fail() {
+	echo "restore: FAILED $*"
+	c5_bootlog "restore-stock: FAILED $*"
+	exit 1
+}
+
+magic4() { head -c 4 "$1" | hexdump -ve '1/1 "%02x"'; }
+size_of() { wc -c < "$1" | tr -d ' '; }
+sum_of() { sha256sum | cut -d' ' -f1; }
+expected_sum() { awk -v f="$1" '{ n = $2; sub(/^\*/, "", n) } n == f { print $1; exit }' "$DIR/SHA256SUMS"; }
+
+KIMG=$DIR/kernel.img
+RIMG=$DIR/rootfs.squashfs
+
+for f in "$KIMG" "$RIMG" "$DIR/SHA256SUMS"; do
+	[ -s "$f" ] || fail "missing $f"
+done
+
+ksum=$(expected_sum kernel.img)
+rsum=$(expected_sum rootfs.squashfs)
+if [ -z "$ksum" ] || [ -z "$rsum" ]; then
+	fail "SHA256SUMS does not list kernel.img and rootfs.squashfs"
+fi
+echo "checking $DIR/SHA256SUMS ..."
+(cd "$DIR" && sha256sum -c SHA256SUMS) || fail "checksum mismatch in $DIR"
+
+[ "$(magic4 "$KIMG")" = 27051956 ] || fail "kernel.img is not a uImage"
+[ "$(head -c 4 "$RIMG")" = hsqs ] || fail "rootfs.squashfs is not squashfs"
+
+own=$(c5_own_slot) || fail "root $(c5_root_dev) is not an eMMC slot; cannot tell which slot is stock"
+slot=$(c5_other_slot)
+kdev=$(c5_part_dev "$(c5_slot_kname "$slot")") || fail "no $(c5_slot_kname "$slot") partition"
+rdev=$(c5_part_dev "$(c5_slot_rname "$slot")") || fail "no $(c5_slot_rname "$slot") partition"
+
+[ "$rdev" != "$(c5_root_dev)" ] || fail "target $rdev is the running root"
+for d in "$kdev" "$rdev"; do
+	grep -q "^$d " /proc/mounts && fail "$d is mounted"
+done
+
+ksz=$(size_of "$KIMG")
+rsz=$(size_of "$RIMG")
+kmax=$(c5_part_bytes "$(c5_slot_kname "$slot")") || fail "cannot size $kdev"
+rmax=$(c5_part_bytes "$(c5_slot_rname "$slot")") || fail "cannot size $rdev"
+[ "$ksz" -le "$kmax" ] || fail "kernel.img ($ksz) larger than $kdev ($kmax)"
+[ "$rsz" -le "$rmax" ] || fail "rootfs.squashfs ($rsz) larger than $rdev ($rmax)"
+
+echo "running slot $own; restoring stock into slot $slot:"
+echo "  kernel.img      ($ksz bytes) -> $kdev"
+echo "  rootfs.squashfs ($rsz bytes) -> $rdev"
+
+if [ "$DRY" = 1 ]; then
+	echo "restore: OK (dry run)"
+	exit 0
+fi
+
+c5_bootlog "restore-stock: writing slot $slot"
+dd if="$KIMG" of="$kdev" bs=1M conv=notrunc,fsync 2>/dev/null || fail "writing $kdev"
+dd if="$RIMG" of="$rdev" bs=1M conv=notrunc,fsync 2>/dev/null || fail "writing $rdev"
+c5_drop_caches
+
+[ "$(head -c "$ksz" "$kdev" | sum_of)" = "$ksum" ] || fail "read-back mismatch on $kdev"
+[ "$(head -c "$rsz" "$rdev" | sum_of)" = "$rsum" ] || fail "read-back mismatch on $rdev"
+c5_bootlog "restore-stock: slot $slot written and verified"
+
+if [ "$REBOOT" = 1 ]; then
+	c5_flag_write "$slot" || fail "written and verified, but the boot flag write failed"
+	echo "restore: OK; flag -> slot $slot, rebooting"
+	sync
+	reboot
+	exit 0
+fi
+echo "restore: OK (boot it with: c5-slot boot-stock --reboot)"

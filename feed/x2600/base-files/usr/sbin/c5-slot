@@ -1,0 +1,80 @@
+#!/bin/sh
+# shellcheck disable=SC1091,SC3043
+#
+# c5-slot status | boot-stock [--reboot] | boot-openwrt [--reboot] | bootlog
+#
+# Inspect and set the Creator 5 Pro SPL boot flag. "stock" is the slot this
+# system is not running from, "openwrt" the one it is running from.
+
+. /lib/c5/slot.sh
+
+usage() {
+	cat <<EOF
+Usage: c5-slot status
+       c5-slot boot-stock [--reboot]     next boot: the other (stock) slot
+       c5-slot boot-openwrt [--reboot]   next boot: this slot
+       c5-slot bootlog                   show the boot log kept in the ota partition
+EOF
+}
+
+not_slot() {
+	echo "c5-slot: root $(c5_root_dev) is not an eMMC slot (USB/chainload test boot?); flag not changed" >&2
+	exit 1
+}
+
+set_flag() { # <slot> <label> [--reboot]
+	c5_flag_write "$1" || { echo "c5-slot: FLAG WRITE FAILED (flag now '$(c5_flag_read)')" >&2; exit 1; }
+	echo "next boot: slot $1 ($2)"
+	c5_bootlog "c5-slot: flag -> slot $1 ($2)"
+	if [ "$3" = "--reboot" ]; then
+		sync
+		reboot
+	fi
+}
+
+status() {
+	local own flag label='' rc=0
+	own=$(c5_own_slot) || own=
+	flag=$(c5_flag_slot)
+	echo "root:      $(c5_root_dev)"
+	if [ -n "$own" ]; then
+		echo "own slot:  $own ($(c5_part_dev "$(c5_slot_kname "$own")") + $(c5_part_dev "$(c5_slot_rname "$own")"))"
+	else
+		echo "own slot:  none - root is not an eMMC slot"
+		rc=1
+	fi
+	if [ -n "$own" ]; then
+		if [ "$flag" = "$own" ]; then label=" (OpenWrt)"; else label=" (stock)"; fi
+	fi
+	echo "flag:      '$(c5_flag_read)' -> next boot slot $flag$label"
+	echo "cmdline:   $(cat "$C5_CMDLINE_FILE")"
+	echo "partitions ($C5_DISK):"
+	partx -s -o NR,START,SECTORS,SIZE,NAME "$C5_DISK" 2>/dev/null | sed 's/^/  /'
+	echo "bootlog (last 10 lines):"
+	c5_bootlog_show | tail -n 10 | sed 's/^/  /'
+	return $rc
+}
+
+case "$1" in
+	status)
+		status
+		;;
+	boot-stock)
+		other=$(c5_other_slot) || not_slot
+		set_flag "$other" stock "$2"
+		;;
+	boot-openwrt)
+		own=$(c5_own_slot) || not_slot
+		set_flag "$own" OpenWrt "$2"
+		;;
+	bootlog)
+		c5_bootlog_show
+		;;
+	-h|--help|help)
+		usage
+		;;
+	*)
+		usage >&2
+		exit 2
+		;;
+esac

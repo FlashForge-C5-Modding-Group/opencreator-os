@@ -1,0 +1,75 @@
+#!/bin/sh
+# shellcheck disable=SC1090,SC3043
+#
+# c5-wifi-sta [--wait SECONDS]
+#
+# Create the Wi-Fi client interface wireless.c5sta (network "wwan", DHCP) from
+# /etc/c5/wifi.conf (shell-sourceable SSID='...' PSK='...', imported from
+# userdata by preinit). Idempotent: does nothing once wireless.c5sta exists.
+#
+# The radio's wifi-device section is created by 'wifi config', which is
+# skipped while /etc/init.d/boot still has /tmp/.config_pending. With --wait
+# the script polls for a wifi-device section for up to SECONDS (the hotplug
+# handler runs it like that in the background); /etc/init.d/c5-booted runs it
+# once more without waiting to cover radios that appeared before hotplug.
+
+CONF=/etc/c5/wifi.conf
+wait_s=0
+[ "$1" = "--wait" ] && wait_s=${2:-0}
+
+[ -s "$CONF" ] || exit 0
+uci -q get wireless.c5sta >/dev/null && exit 0
+
+first_radio() {
+	local s
+	for s in $(uci -q show wireless | sed -n "s/^wireless\.\([^.=]*\)=wifi-device$/\1/p"); do
+		echo "$s"
+		return 0
+	done
+	return 1
+}
+
+while ! radio=$(first_radio); do
+	[ "$wait_s" -gt 0 ] || exit 0
+	wait_s=$((wait_s - 1))
+	sleep 1
+done
+
+lock /var/lock/c5-wifi-sta
+trap 'lock -u /var/lock/c5-wifi-sta' EXIT
+
+uci -q get wireless.c5sta >/dev/null && exit 0
+
+SSID='' PSK=''
+. "$CONF"
+[ -n "$SSID" ] || { logger -t c5-wifi-sta "no SSID in $CONF"; exit 0; }
+
+# Keep the default open AP that 'wifi config' generates disabled.
+for s in $(uci -q show wireless | sed -n "s/^wireless\.\([^.=]*\)=wifi-iface$/\1/p"); do
+	[ "$(uci -q get "wireless.$s.device")" = "$radio" ] && uci -q set "wireless.$s.disabled=1"
+done
+
+uci -q get network.wwan >/dev/null || uci -q batch <<EOF
+set network.wwan=interface
+set network.wwan.proto='dhcp'
+commit network
+EOF
+
+uci -q batch <<EOF
+set wireless.$radio.disabled='0'
+set wireless.c5sta=wifi-iface
+set wireless.c5sta.device='$radio'
+set wireless.c5sta.mode='sta'
+set wireless.c5sta.network='wwan'
+EOF
+uci -q set "wireless.c5sta.ssid=$SSID"
+if [ -n "$PSK" ]; then
+	uci -q set wireless.c5sta.encryption=psk2
+	uci -q set "wireless.c5sta.key=$PSK"
+else
+	uci -q set wireless.c5sta.encryption=none
+fi
+uci -q commit wireless
+
+logger -t c5-wifi-sta "client for '$SSID' configured on $radio"
+wifi reload

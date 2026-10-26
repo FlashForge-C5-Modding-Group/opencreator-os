@@ -1,0 +1,42 @@
+#!/bin/sh /etc/rc.common
+# shellcheck disable=SC1091,SC3043,SC2034  # START is read by /etc/rc.common
+#
+# End of the try-once boot: preinit (05_c5_tryboot) pointed the boot flag at
+# the stock slot; once this boot is healthy, point it back at our slot.
+# Healthy = /data mounted, dropbear running, and no test marker
+# /data/opencreator-os/tryboot-fail-test.
+
+START=99
+
+boot() {
+	. /lib/c5/slot.sh
+	local own why='' logs=/data/opencreator-os/logs data=0
+
+	/usr/libexec/c5-wifi-sta
+
+	grep -q '^[^ ]* /data ' /proc/mounts && data=1
+
+	if own=$(c5_own_slot); then
+		[ "$data" = 1 ] || why="$why /data not mounted;"
+		pidof dropbear >/dev/null || why="$why dropbear not running;"
+		[ -e /data/opencreator-os/tryboot-fail-test ] && why="$why tryboot-fail-test marker present;"
+		if [ -z "$why" ]; then
+			if c5_flag_write "$own"; then
+				c5_bootlog "booted: flag -> slot $own (OpenWrt)"
+			else
+				c5_bootlog "booted: FLAG WRITE FAILED; flag stays '$(c5_flag_read)'"
+			fi
+		else
+			c5_bootlog "booted: NOT healthy ($why ); flag stays on stock"
+		fi
+	else
+		c5_bootlog "booted: root $(c5_root_dev) is not an eMMC slot; flag untouched"
+	fi
+
+	[ "$data" = 1 ] || return 0
+	mkdir -p "$logs"
+	dmesg > "$logs/dmesg-last.txt" 2>&1
+	logread > "$logs/logread-last.txt" 2>&1
+	c5_bootlog_show > "$logs/bootlog-last.txt"
+	sync
+}

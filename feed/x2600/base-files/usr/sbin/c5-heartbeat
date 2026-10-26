@@ -1,0 +1,39 @@
+#!/bin/sh
+# shellcheck disable=SC3043  # busybox ash supports 'local'
+# Toggle the Creator 5 Pro heartbeat GPIO (PC11) once per second, forever.
+#
+# GPIO number: $C5_HEARTBEAT_GPIO if set, else port C base + 11 found by the
+# gpiochip label (Ingenic SDK driver: "GPC", mainline driver: "GPIOC"), else 75
+# (port C base 64 with 32 pins per port).
+
+PIN=11
+
+find_gpio() {
+	local c label
+	if [ -n "$C5_HEARTBEAT_GPIO" ]; then
+		echo "$C5_HEARTBEAT_GPIO"
+		return
+	fi
+	for c in /sys/class/gpio/gpiochip*; do
+		[ -r "$c/label" ] || continue
+		label=$(cat "$c/label")
+		case "$label" in
+			GPC|GPIOC) echo $(($(cat "$c/base") + PIN)); return ;;
+		esac
+	done
+	echo $((64 + PIN))
+}
+
+gpio=$(find_gpio)
+g=/sys/class/gpio/gpio$gpio
+
+[ -d "$g" ] || echo "$gpio" > /sys/class/gpio/export
+[ -d "$g" ] || { echo "c5-heartbeat: cannot export gpio $gpio" >&2; exit 1; }
+echo out > "$g/direction" || { echo "c5-heartbeat: gpio $gpio is not an output" >&2; exit 1; }
+
+v=0
+while :; do
+	v=$((1 - v))
+	echo "$v" > "$g/value"
+	sleep 1
+done

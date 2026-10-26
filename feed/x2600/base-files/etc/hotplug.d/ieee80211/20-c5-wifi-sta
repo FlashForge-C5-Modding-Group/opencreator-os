@@ -1,0 +1,9 @@
+# shellcheck shell=sh
+# Sourced by hotplug-call in a subshell, after 10-wifi-detect ('wifi config').
+# During early boot 'wifi config' is deferred by /etc/init.d/boot, so wait for
+# the radio's wifi-device section in the background.
+
+[ "$ACTION" = add ] || exit 0
+[ -s /etc/c5/wifi.conf ] || exit 0
+
+/usr/libexec/c5-wifi-sta --wait 120 >/dev/null 2>&1 </dev/null &
