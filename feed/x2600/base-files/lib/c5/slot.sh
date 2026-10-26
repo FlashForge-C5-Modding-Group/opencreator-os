@@ -10,12 +10,19 @@
 # slot 2, ota = boot flag ("ota:kernel" -> slot 1, "ota:kernel2" -> slot 2,
 # the SPL compares the first 11 bytes), userdata = stock /usr/data.
 #
-# Overridable for testing: C5_DISK, C5_CMDLINE_FILE, C5_SYSBLOCK, C5_KMSG.
+# Overridable for testing: C5_DISK, C5_CMDLINE_FILE, C5_SYSBLOCK, C5_KMSG,
+# C5_MOUNTS, C5_DATA, C5_OCDIR, C5_REBOOT_MARK.
 
 C5_DISK=${C5_DISK:-/dev/mmcblk0}
 C5_CMDLINE_FILE=${C5_CMDLINE_FILE:-/proc/cmdline}
 C5_SYSBLOCK=${C5_SYSBLOCK:-/sys/class/block}
 C5_KMSG=${C5_KMSG:-/dev/kmsg}
+C5_MOUNTS=${C5_MOUNTS:-/proc/mounts}
+C5_DATA=${C5_DATA:-/data}                       # userdata mount point (fstab)
+C5_OCDIR=${C5_OCDIR:-$C5_DATA/opencreator-os}   # saved stock, logs, pending-commit
+# Created by the USB recovery hook right before it reboots; tells c5-booted
+# (which may still run while the reboot is in progress) to leave the flag.
+C5_REBOOT_MARK=${C5_REBOOT_MARK:-/tmp/c5-recovery.reboot}
 C5_BOOTLOG_SECTOR=128      # bootlog lives at 64 KiB inside the ota partition ...
 C5_BOOTLOG_SECTORS=128     # ... and is 64 KiB long
 C5_BOOTLOG_MAGIC=C5BOOTLOG1
@@ -159,4 +166,22 @@ c5_bootlog() {
 			conv=notrunc,fsync 2>/dev/null
 	rm -f "$tmp" "$tmp.new"
 	return 0
+}
+
+# First 4 bytes of a file or device as lowercase hex.
+c5_magic_hex() { head -c 4 "$1" 2>/dev/null | hexdump -ve '1/1 "%02x"'; }
+
+# $1 = device: is it mounted anywhere?
+c5_mounted() { awk -v d="$1" '$1 == d { f = 1 } END { exit !f }' "$C5_MOUNTS"; }
+
+# $1 = directory: is something mounted on it?
+c5_is_mountpoint() { awk -v m="$1" '$2 == m { f = 1 } END { exit !f }' "$C5_MOUNTS"; }
+
+# $1 = 1|2: kernel partition starts with a uImage header and rootfs with a
+# squashfs superblock (what the SPL and the kernel need to get going).
+c5_slot_bootable() {
+	local k r
+	k=$(c5_part_dev "$(c5_slot_kname "$1")") || return 1
+	r=$(c5_part_dev "$(c5_slot_rname "$1")") || return 1
+	[ "$(c5_magic_hex "$k")" = 27051956 ] && [ "$(head -c 4 "$r" 2>/dev/null)" = hsqs ]
 }

@@ -14,3 +14,5 @@ CONFIG_VERSION_HOME_URL="https://github.com/FlashForge-C5-Modding-Group/opencrea
 CONFIG_PACKAGE_wpad-basic-mbedtls=y
 CONFIG_PACKAGE_kmod-rtw88-8821cu=y
 CONFIG_PACKAGE_rtl8821ce-firmware=y
+# The vendor kernel tree has warnings that -Werror turns into failures.
+# CONFIG_KERNEL_WERROR is not set

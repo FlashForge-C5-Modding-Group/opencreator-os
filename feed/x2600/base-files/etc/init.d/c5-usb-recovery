@@ -1,0 +1,12 @@
+#!/bin/sh /etc/rc.common
+# shellcheck disable=SC2034  # START is read by /etc/rc.common
+#
+# Run the OpenWrt-side USB recovery hook once per boot, after fstab (11) has
+# mounted /data and before the network and c5-booted (99). See
+# /usr/libexec/c5-usb-recovery.
+
+START=19
+
+boot() {
+	/usr/libexec/c5-usb-recovery
+}

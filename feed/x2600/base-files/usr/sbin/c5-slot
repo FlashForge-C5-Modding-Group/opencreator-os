@@ -47,6 +47,14 @@ status() {
 		if [ "$flag" = "$own" ]; then label=" (OpenWrt)"; else label=" (stock)"; fi
 	fi
 	echo "flag:      '$(c5_flag_read)' -> next boot slot $flag$label"
+	if [ -f "$C5_OCDIR/pending-commit" ]; then
+		echo "pending:   sysupgrade not committed yet (the next healthy boot of its slot commits it):"
+		sed 's/^/  /' "$C5_OCDIR/pending-commit"
+	elif c5_is_mountpoint "$C5_DATA"; then
+		echo "pending:   none"
+	else
+		echo "pending:   unknown ($C5_DATA not mounted)"
+	fi
 	echo "cmdline:   $(cat "$C5_CMDLINE_FILE")"
 	echo "partitions ($C5_DISK):"
 	partx -s -o NR,START,SECTORS,SIZE,NAME "$C5_DISK" 2>/dev/null | sed 's/^/  /'
@@ -61,10 +69,16 @@ case "$1" in
 		;;
 	boot-stock)
 		other=$(c5_other_slot) || not_slot
+		c5_slot_bootable "$other" || {
+			echo "c5-slot: slot $other does not look bootable (kernel not a uImage or rootfs not squashfs); flag not changed" >&2
+			exit 1
+		}
 		set_flag "$other" stock "$2"
 		;;
 	boot-openwrt)
 		own=$(c5_own_slot) || not_slot
+		[ -f "$C5_OCDIR/pending-commit" ] &&
+			echo "c5-slot: note: slot $own holds an uncommitted sysupgrade; the SPL will boot it directly (try-once still applies)"
 		set_flag "$own" OpenWrt "$2"
 		;;
 	bootlog)

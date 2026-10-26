@@ -2,27 +2,40 @@
 # shellcheck disable=SC1091,SC3043,SC2034  # START is read by /etc/rc.common
 #
 # End of the try-once boot: preinit (05_c5_tryboot) pointed the boot flag at
-# the stock slot; once this boot is healthy, point it back at our slot.
+# the stock slot; once this boot is healthy, point it back at our slot. That
+# also commits a sysupgrade or install that is booting for the first time:
+# /data/opencreator-os/pending-commit (written by sysupgrade) is removed.
 # Healthy = /data mounted, dropbear running, and no test marker
-# /data/opencreator-os/tryboot-fail-test.
+# /data/opencreator-os/tryboot-fail-test. Nothing is changed while the USB
+# recovery hook is rebooting (/tmp/c5-recovery.reboot).
 
 START=99
 
 boot() {
 	. /lib/c5/slot.sh
-	local own why='' logs=/data/opencreator-os/logs data=0
+	local own why='' logs="$C5_OCDIR/logs" pending="$C5_OCDIR/pending-commit" data=0 ver
+
+	if [ -e "$C5_REBOOT_MARK" ]; then
+		c5_bootlog "booted: USB recovery is rebooting; flag untouched"
+		return 0
+	fi
 
 	/usr/libexec/c5-wifi-sta
 
-	grep -q '^[^ ]* /data ' /proc/mounts && data=1
+	c5_is_mountpoint "$C5_DATA" && data=1
 
 	if own=$(c5_own_slot); then
-		[ "$data" = 1 ] || why="$why /data not mounted;"
+		[ "$data" = 1 ] || why="$why $C5_DATA not mounted;"
 		pidof dropbear >/dev/null || why="$why dropbear not running;"
-		[ -e /data/opencreator-os/tryboot-fail-test ] && why="$why tryboot-fail-test marker present;"
+		[ -e "$C5_OCDIR/tryboot-fail-test" ] && why="$why tryboot-fail-test marker present;"
 		if [ -z "$why" ]; then
 			if c5_flag_write "$own"; then
 				c5_bootlog "booted: flag -> slot $own (OpenWrt)"
+				if [ -f "$pending" ] && [ "$(sed -n 's/^slot=//p' "$pending")" = "$own" ]; then
+					ver=$(sed -n 's/^version=//p' "$pending")
+					rm -f "$pending"
+					c5_bootlog "booted: committed sysupgrade ${ver:-?} in slot $own"
+				fi
 			else
 				c5_bootlog "booted: FLAG WRITE FAILED; flag stays '$(c5_flag_read)'"
 			fi

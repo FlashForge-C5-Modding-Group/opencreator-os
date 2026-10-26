@@ -12,14 +12,21 @@
 # platform_copy_config run later from do_stage2 inside the ramfs, so nothing
 # computed in platform_check_image survives - everything is recomputed here.
 #
-# Safety: the boot flag is pointed at the stock slot before our slot is
-# written and back at our slot only after the written kernel and rootfs read
-# back correctly, so a power loss or a bad write boots stock. The next boot's
-# 05_c5_tryboot re-arms the try-once fallback as usual.
+# Test-then-commit: the boot flag is pointed at the stock slot before our
+# slot is written and stays there afterwards, also after a verified write.
+# The next boot is therefore stock. The new image becomes the default only
+# after it has booted once and /etc/init.d/c5-booted found it healthy: test
+# it from stock with chainload (c5-chainload.sh stage/go over SSH, or a
+# --chainload install stick), or with switch-to-openwrt.sh (SPL boot,
+# try-once still applies). To make that possible the new kernel is copied to
+# userdata as opencreator-os/chainload/kernel.uimage (the image
+# c5-chainload.sh stages by default) and opencreator-os/pending-commit
+# records what was written; c5-booted removes it when it commits.
 #
 # Config: platform_copy_config stores $UPGRADE_BACKUP on userdata as
 # opencreator-os/sysupgrade.tgz; preinit 79_c5_move_config moves it to
-# /sysupgrade.tgz, which 80_mount_root restores.
+# /sysupgrade.tgz on the first boot of the new image, and 80_mount_root
+# restores it.
 
 . /lib/c5/slot.sh
 
@@ -28,8 +35,8 @@ REQUIRE_IMAGE_METADATA=1
 # cat dd grep mount umount mkdir cp mv rm sync printf date logger; add the rest
 # used by this file and slot.sh. Names are resolved with 'command -v', and
 # busybox applet links are recreated in the ramfs pointing at /bin/busybox.
-RAMFS_COPY_BIN='head tr sha256sum'
-RAMFS_COPY_DATA='/lib/c5/slot.sh'
+RAMFS_COPY_BIN='head tr sha256sum fwtool jsonfilter'
+RAMFS_COPY_DATA='/lib/c5/slot.sh /etc/openwrt_release'
 
 c5_su_dir() { # <tar> -> "sysupgrade-<board>/" (from the first member path)
 	local d
@@ -82,6 +89,37 @@ c5_wipe_overlay() { # <rootfs dev> <partition bytes>
 	dd if=/dev/zero of="$1" bs=512 seek=$((off / 512)) count=8 conv=notrunc,fsync 2>/dev/null
 }
 
+# Version of the image from its fwtool metadata ("unknown" if unreadable).
+c5_su_version() { # <tar>
+	local meta=/tmp/.c5-su-meta.json ver=''
+	if fwtool -q -i "$meta" "$1" 2>/dev/null; then
+		ver=$(jsonfilter -i "$meta" -e '@.version.version' 2>/dev/null)
+	fi
+	rm -f "$meta"
+	echo "${ver:-unknown}"
+}
+
+# Runs with userdata mounted at /tmp/c5data (c5_with_userdata). Uses the
+# C5_SU_* variables set by platform_do_upgrade.
+c5_store_pending() {
+	local d=/tmp/c5data/opencreator-os
+	mkdir -p "$d/chainload" || return 1
+	# sysupgrade -n: drop a stale saved config so it is not restored later.
+	[ -n "$UPGRADE_BACKUP" ] || rm -f "$d/sysupgrade.tgz"
+	c5_su_member "$C5_SU_TAR" "$C5_SU_DIR" kernel > "$d/chainload/kernel.uimage.new" || return 1
+	[ "$(sha256sum < "$d/chainload/kernel.uimage.new" | cut -d' ' -f1)" = "$C5_SU_KSUM" ] || return 1
+	mv -f "$d/chainload/kernel.uimage.new" "$d/chainload/kernel.uimage" || return 1
+	{
+		echo "slot=$C5_SU_SLOT"
+		echo "rootdev=$C5_SU_RDEV"
+		echo "version=$C5_SU_VERSION"
+		echo "previous=$C5_SU_PREVIOUS"
+		echo "date=$(date '+%F %T')"
+		echo "kernel_sha256=$C5_SU_KSUM"
+		echo "rootfs_sha256=$C5_SU_RSUM"
+	} > "$d/pending-commit.new" && mv -f "$d/pending-commit.new" "$d/pending-commit"
+}
+
 platform_do_upgrade() {
 	local tar="$1" own other dir kdev rdev rmax ksum rsum ksz rsz
 	own=$(c5_own_slot) || { v "root $(c5_root_dev) is not an eMMC slot; not writing"; return 1; }
@@ -95,7 +133,7 @@ platform_do_upgrade() {
 	ksz=$(c5_su_member "$tar" "$dir" kernel | wc -c)
 	rsz=$(c5_su_member "$tar" "$dir" root | wc -c)
 
-	v "Pointing the boot flag at stock (slot $other) while slot $own is written"
+	v "Pointing the boot flag at stock (slot $other); it stays there after the write"
 	c5_flag_write "$other" || { v "boot flag write failed; not writing"; return 1; }
 	c5_bootlog "sysupgrade: writing slot $own"
 
@@ -112,13 +150,23 @@ platform_do_upgrade() {
 		return 1
 	fi
 	c5_wipe_overlay "$rdev" "$rmax" || v "warning: could not clear the old overlay"
+	c5_bootlog "sysupgrade: slot $own written and verified; flag stays on stock (slot $other) until a test boot commits it"
 
-	c5_flag_write "$own" || { v "boot flag write failed; next boot is stock (slot $other)"; return 1; }
-	c5_bootlog "sysupgrade: slot $own written and verified; flag -> slot $own"
-	v "Slot $own written and verified"
+	C5_SU_TAR=$tar C5_SU_DIR=$dir C5_SU_SLOT=$own C5_SU_RDEV=$rdev C5_SU_KSUM=$ksum C5_SU_RSUM=$rsum
+	C5_SU_VERSION=$(c5_su_version "$tar")
+	C5_SU_PREVIOUS=$(sed -n "s/^DISTRIB_RELEASE='\{0,1\}\([^']*\)'\{0,1\}$/\1/p" /etc/openwrt_release 2>/dev/null)
+	if c5_with_userdata c5_store_pending; then
+		v "Recorded opencreator-os/pending-commit and chainload/kernel.uimage on userdata"
+	else
+		v "warning: could not record pending-commit / chainload/kernel.uimage on userdata"
+	fi
 
-	# sysupgrade -n: drop a stale saved config so it is not restored later.
-	[ -n "$UPGRADE_BACKUP" ] || c5_with_userdata rm -f /tmp/c5data/opencreator-os/sysupgrade.tgz
+	v "Slot $own written and verified (version $C5_SU_VERSION). NEXT BOOT IS STOCK (slot $other)."
+	v "Test-boot the new image from stock before it becomes the default:"
+	v "  over SSH on stock: sh /usr/data/opencreator-os/chainload/c5-chainload.sh stage $rdev"
+	v "                     sh /usr/data/opencreator-os/chainload/c5-chainload.sh go"
+	v "  or a USB stick made with tools/make-install-stick.sh --chainload"
+	v "The first healthy boot of slot $own commits it (c5-booted points the flag at it)."
 	return 0
 }
 
