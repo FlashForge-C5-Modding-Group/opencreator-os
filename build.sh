@@ -65,6 +65,11 @@ fi
 log "kernel tree"
 KSRC=$("$REPO/kernel/prepare.sh" --work "$WORK" | tail -1)
 [ -f "$KSRC/Makefile" ] || die "kernel/prepare.sh did not produce a tree"
+# OpenWrt copies .config.set to .config only when .config.set differs from
+# .config.prev. A kernel patch that adds a Kconfig symbol leaves .config.set
+# unchanged while kbuild has already dropped the then-unknown symbol from
+# .config, so force the copy every build.
+rm -f "$KSRC/.config.prev"
 
 VERSION=$(git -C "$REPO" describe --always --dirty --tags)
 log "config ($VERSION)"
