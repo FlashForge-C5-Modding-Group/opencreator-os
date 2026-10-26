@@ -57,6 +57,8 @@ cap tty.txt 'ls -l /dev/ttyS* /dev/ttyUSB* /dev/ttyACM* 2>&1'
 cap net.txt 'ip addr; ip link'
 cap df.txt 'df -k'
 
+cat /sys/firmware/fdt > "$F/running.dtb" 2>/dev/null || rm -f "$F/running.dtb"
+
 # Partition map by GPT name: NAME NR START_SECTOR SIZE_SECTORS
 fdisk -l "$DISK" 2>/dev/null | awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ { print $NF, $1, $2, $3 - $2 + 1 }' > "$F/partmap.txt"
 log "partmap:"; cat "$F/partmap.txt" | tee -a "$LOG"
