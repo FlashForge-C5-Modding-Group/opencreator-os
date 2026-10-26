@@ -1,0 +1,9 @@
+out/
+chainload/*.ko
+chainload/*.o
+chainload/*.mod
+chainload/*.mod.c
+chainload/.*.cmd
+chainload/Module.symvers
+chainload/modules.order
+__pycache__/
