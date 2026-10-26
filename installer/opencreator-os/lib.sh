@@ -17,7 +17,9 @@
 #   C5_REBOOT      reboot command                             (reboot)
 #   C5_UNAME_R     kernel release                             ($(uname -r))
 #   C5_SUM         force md5sum or sha256sum                  (sha256sum if present)
-# Callers set STICK (payload directory) and FBDIR (screen images) as needed.
+# Callers set STICK (directory for the stick-side log) and FBDIR (screen
+# images) as needed; LOG_STICK_NAME / LOG_DATA_NAME name the log files on
+# the stick and in $OCDIR.
 
 C5_DISK=${C5_DISK:-/dev/mmcblk0}
 C5_FDISK=${C5_FDISK:-fdisk}
@@ -33,6 +35,8 @@ C5_UNAME_R=${C5_UNAME_R:-$(uname -r)}
 OCDIR=$C5_DATA/opencreator-os
 UIMAGE_MAGIC=27051956
 SQUASHFS_MAGIC=hsqs
+LOG_STICK_NAME=${LOG_STICK_NAME:-opencreator-os-install.log}
+LOG_DATA_NAME=${LOG_DATA_NAME:-install.log}
 
 # --- logging and screen ------------------------------------------------------
 
@@ -40,10 +44,10 @@ log() {
 	log_line="$(date '+%F %T') $*"
 	echo "$*"
 	if [ -n "${STICK:-}" ] && [ -d "$STICK" ]; then
-		echo "$log_line" >> "$STICK/opencreator-os-install.log" 2>/dev/null
+		echo "$log_line" >> "$STICK/$LOG_STICK_NAME" 2>/dev/null
 	fi
 	if mkdir -p "$OCDIR" 2>/dev/null; then
-		echo "$log_line" >> "$OCDIR/install.log" 2>/dev/null
+		echo "$log_line" >> "$OCDIR/$LOG_DATA_NAME" 2>/dev/null
 	fi
 	return 0
 }
@@ -72,6 +76,12 @@ drop_caches() {
 # listing stock's mmc_name_to_dev parses (NR START END SIZE NAME; name last).
 part_map() {
 	"$C5_FDISK" -l "$C5_DISK" 2>/dev/null | awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ { print $NF, $1 }'
+}
+
+# part_table: "NAME NR START SIZE" (sectors) per GPT entry, the format of
+# tools/printer/phase0.sh's partmap.txt.
+part_table() {
+	"$C5_FDISK" -l "$C5_DISK" 2>/dev/null | awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ { print $NF, $1, $2, $3 - $2 + 1 }'
 }
 
 # part_dev NAME -> /dev/mmcblk0pN; fails when NAME is not unique or absent.
