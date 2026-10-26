@@ -1,0 +1,299 @@
+# shellcheck shell=bash
+# QEMU system-test helpers: fixtures (stock root, eMMC image, sticks), the SPL
+# emulator, boots, image inspection and checks. Sourced by test/qemu/run.sh.
+# shellcheck source=env.sh
+. "$(dirname "${BASH_SOURCE[0]}")/env.sh"
+
+FIX=$QWORK/fixtures
+STOCK_SQFS=$FIX/stock-rootfs.squashfs
+STOCK_KERNEL=$FIX/stock-kernel.uimage
+BASE_DISK=$FIX/base-disk.img
+OWRT_SQFS=$FIX/openwrt-root.squashfs
+QEMU_ROOT_PASSWORD=${QEMU_ROOT_PASSWORD:-FlashForge2026}
+export QEMU_ROOT_PASSWORD
+
+# ---------------------------------------------------------------- logging --
+
+# Per-scenario state: RUN (directory), FAILS (failed checks), BOOTN (boots)
+say() { echo "[$(date +%T)] $*" | tee -a "$RUN/scenario.log" >&2; }
+
+check() { # check DESCRIPTION CMD... ; records ok/FAIL, never aborts
+	local d=$1
+	shift
+	if "$@" >> "$RUN/checks.out" 2>&1; then
+		say "  ok   $d"
+	else
+		say "  FAIL $d"
+		FAILS=$((FAILS + 1))
+	fi
+}
+
+fatal() { say "  FAIL $*"; FAILS=$((FAILS + 1)); return 1; }
+
+# ------------------------------------------------------- image inspection --
+
+poff() { echo $((PSTART[$1] * 512)); }
+
+img_bytes() { # DISK OFFSET LEN -> raw bytes on stdout
+	dd if="$1" bs=1M iflag=skip_bytes,count_bytes skip="$2" count="$3" status=none
+}
+
+img_flag() { img_bytes "$1" "$(poff 5)" 11 | tr -d '\000\n'; }
+img_flag_hex() { img_bytes "$1" "$(poff 5)" 16 | od -An -tx1 | tr -d ' \n'; }
+img_bootlog() { img_bytes "$1" $(($(poff 5) + 65536)) 65536 | tr -d '\000'; }
+img_part_sum() { img_bytes "$1" "$(poff "$2")" "$3" | sha256sum | cut -d' ' -f1; }
+img_part_magic() { img_bytes "$1" "$(poff "$2")" 4 | od -An -tx1 | tr -d ' \n'; }
+
+# ext4 file systems inside the image: debugfs with ?offset=
+userdata_spec() { echo "$1?offset=$(poff 7)"; }
+data_cat() { debugfs -R "cat $2" "$(userdata_spec "$1")" 2>/dev/null; }
+data_has() { debugfs -R "stat $2" "$(userdata_spec "$1")" 2>/dev/null | grep -q '^Inode:'; }
+data_ls() { debugfs -R "ls -l $2" "$(userdata_spec "$1")" 2>/dev/null; }
+data_rm() { debugfs -w -R "rm $2" "$(userdata_spec "$1")" >/dev/null 2>&1; }
+data_put() { # DISK LOCALFILE PATH (parent directory must exist)
+	debugfs -w -R "rm $3" "$(userdata_spec "$1")" >/dev/null 2>&1
+	debugfs -w -R "write $2 $3" "$(userdata_spec "$1")" 2>&1 | grep -q 'Allocated inode' 
+}
+data_mkdir() { debugfs -w -R "mkdir $2" "$(userdata_spec "$1")" >/dev/null 2>&1; }
+
+# OpenWrt overlay (fstools rootfs_data) inside slot N's rootfs partition
+squashfs_used() { # FILE|DISK [OFFSET] -> bytes_used
+	img_bytes "$1" $((${2:-0} + 40)) 8 | od -An -tu8 | tr -d ' '
+}
+overlay_off() { # DISK SLOTPART -> byte offset of rootfs_data in the image
+	local used
+	used=$(squashfs_used "$1" "$(poff "$2")")
+	echo $(($(poff "$2") + (used + 65535) / 65536 * 65536))
+}
+overlay_spec() { echo "$1?offset=$(overlay_off "$1" "$2")"; }
+overlay_cat() { debugfs -R "cat $3" "$(overlay_spec "$1" "$2")" 2>/dev/null; }
+overlay_is_ext4() { [ "$(img_bytes "$1" $(($(overlay_off "$1" "$2") + 1080)) 2 | od -An -tx1 | tr -d ' \n')" = 53ef ]; }
+
+# ------------------------------------------------------------- fixtures --
+
+# Stock 2.0.0 root (local test fixture, never committed) + the test init.
+build_stock_fixture() {
+	local key stage
+	mkdir -p "$FIX"
+	key=$({ git -C "$STOCK_ARCHIVE" rev-parse "HEAD:$STOCK_ROOTFS_PATH"
+		git -C "$STOCK_ARCHIVE" rev-parse HEAD:software/app_startup.sh
+		cat "$QDIR"/fixtures/stock/*; declare -f build_stock_fixture; } | sha256sum | cut -c1-16)
+	if [ -s "$STOCK_SQFS" ] && [ "$(cat "$STOCK_SQFS.key" 2>/dev/null)" = "$key" ]; then
+		return 0
+	fi
+	echo "fixture: building the stock root squashfs" >&2
+	stage=$FIX/stock-stage
+	rm -rf "$stage"
+	mkdir -p "$stage"
+	git -C "$STOCK_ARCHIVE" archive --format=tar "HEAD:$STOCK_ROOTFS_PATH" | tar -x -C "$stage"
+	# git keeps no empty directories: recreate the mount points of the stock
+	# image (buildroot skeleton + stock's /usr/prog and /usr/data)
+	(cd "$stage" && mkdir -p proc sys tmp run mnt root media opt home usr/prog usr/data)
+	install -m 0644 "$QDIR/fixtures/stock/inittab" "$stage/etc/inittab"
+	install -m 0755 "$QDIR/fixtures/stock/qemu-stock-init" "$QDIR/fixtures/stock/qemu-stock-finish" "$stage/"
+	# The USB-hook part of stock's app_startup.sh, unchanged except that the
+	# endless "sleep 100000" stall prints a marker and ends the script.
+	git -C "$STOCK_ARCHIVE" show HEAD:software/app_startup.sh | tr -d '\r' |
+		awk '/^CONTROL_DIR=/ { exit }
+			/sleep 100000/ { sub(/sleep 100000/, "echo QEMU-STOCK-HOOK rc=0 stall; exit 0") }
+			{ print }
+			END { print "echo QEMU-STOCK-HOOK continue" }' > "$stage/qemu-app-startup.sh"
+	grep -q 'QEMU-STOCK-HOOK rc=0 stall' "$stage/qemu-app-startup.sh" || { echo "fixture: app_startup.sh stall line not found" >&2; return 1; }
+	chmod 0755 "$stage/qemu-app-startup.sh"
+	rm -f "$STOCK_SQFS"
+	mksquashfs "$stage" "$STOCK_SQFS" -comp xz -all-root -noappend -quiet >/dev/null
+	git -C "$STOCK_ARCHIVE" show "HEAD:kernel/ota_kernel_emmc/ota_v1/$(git -C "$STOCK_ARCHIVE" ls-tree --name-only HEAD kernel/ota_kernel_emmc/ota_v1/ | sed -n 's#.*/\(xImage\.[^/]*\)$#\1#p' | head -n 1)" > "$STOCK_KERNEL"
+	[ "$(head -c 4 "$STOCK_KERNEL" | od -An -tx1 | tr -d ' ')" = 27051956 ] || { echo "fixture: stock xImage missing" >&2; return 1; }
+	echo "$key" > "$STOCK_SQFS.key"
+	rm -f "$BASE_DISK"
+}
+
+# 2 GiB eMMC image with the printer's GPT; stock in both slots (as after a
+# stock OTA), flag on slot 2, usershare with a Wi-Fi config, empty userdata.
+build_base_disk() {
+	local d st u
+	[ -s "$BASE_DISK" ] && return 0
+	echo "fixture: building the eMMC base image" >&2
+	d=$BASE_DISK.tmp
+	rm -f "$d"
+	truncate -s $((DISK_SECTORS * 512)) "$d"
+	sgdisk -o --resize-table=8 \
+		-n 1:2048:18431 -c 1:kernel -n 2:18432:223231 -c 2:rootfs \
+		-n 3:223232:239615 -c 3:kernel2 -n 4:239616:444415 -c 4:rootfs2 \
+		-n 5:444416:446463 -c 5:ota -n 6:446464:2543615 -c 6:usershare \
+		-n 7:2543616:0 -c 7:userdata "$d" >/dev/null
+	for p in 1 3; do dd if="$STOCK_KERNEL" of="$d" bs=512 seek="${PSTART[$p]}" conv=notrunc status=none; done
+	for p in 2 4; do dd if="$STOCK_SQFS" of="$d" bs=512 seek="${PSTART[$p]}" conv=notrunc status=none; done
+	printf 'ota:kernel2\n' | dd of="$d" bs=512 seek="${PSTART[5]}" conv=notrunc,sync status=none
+	st=$FIX/usershare-stage
+	rm -rf "$st"
+	mkdir -p "$st/wifi"
+	cat > "$st/wifi/wpa_supplicant.conf" <<'EOF'
+ctrl_interface=/var/run/wpa_supplicant
+update_config=1
+
+network={
+	ssid="QEMU Test Net"
+	psk="qemu-psk-'quoted'-123"
+	key_mgmt=WPA-PSK
+}
+EOF
+	u=$(sgdisk -i 7 "$d" | sed -n 's/^Last sector: \([0-9]*\).*/\1/p')
+	MKE2FS_CONFIG=$FIX/stock-stage/etc/mke2fs.conf mkfs.ext4 -q -F -L usershare -d "$st" \
+		-E offset="$(poff 6)" "$d" $((PSIZE[6] / 2))k
+	MKE2FS_CONFIG=$FIX/stock-stage/etc/mke2fs.conf mkfs.ext4 -q -F -L userdata \
+		-E offset="$(poff 7)" "$d" $(((u + 1 - PSTART[7]) / 2))k
+	mv "$d" "$BASE_DISK"
+}
+
+# OpenWrt root used by the tests: the build's root.squashfs, by default with
+# the working tree's feed/x2600/base-files laid over it (QEMU_REFRESH_ROOTFS=0
+# tests the build artifact unchanged).
+build_openwrt_fixture() {
+	local src=$OWRT_ART-root.squashfs key stage
+	[ -s "$src" ] || return 1
+	if [ "${QEMU_REFRESH_ROOTFS:-1}" = 0 ]; then
+		key=artifact-$(stat -c %Y-%s "$src")
+	else
+		key=refresh-$(stat -c %Y-%s "$src")-$(cd "$QREPO/feed/x2600/base-files" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16)
+	fi
+	if [ -s "$OWRT_SQFS" ] && [ "$(cat "$OWRT_SQFS.key" 2>/dev/null)" = "$key" ]; then
+		return 0
+	fi
+	rm -f "$OWRT_SQFS"
+	if [ "${QEMU_REFRESH_ROOTFS:-1}" = 0 ]; then
+		cp "$src" "$OWRT_SQFS"
+	else
+		echo "fixture: OpenWrt root + working-tree base-files" >&2
+		stage=$FIX/openwrt-stage
+		rm -rf "$stage"
+		# device nodes cannot be created unprivileged; OpenWrt's image has
+		# only /dev/console, recreated below as a pseudo file
+		unsquashfs -q -n -d "$stage" "$src" >/dev/null 2>&1 || [ -x "$stage/sbin/procd" ] || return 1
+		(cd "$QREPO/feed/x2600/base-files" && find . -type f -print0 | xargs -0 -I{} sh -c '
+			mkdir -p "$(dirname "$1/$2")" && cp -f "$2" "$1/$2" && chmod "$(stat -c %a "$2")" "$1/$2"' _ "$stage" {})
+		# git file modes (the F: checkout may show everything as 0777/0644)
+		git -C "$QREPO" ls-files -s feed/x2600/base-files | while read -r mode _ _ path; do
+			f=$stage/${path#feed/x2600/base-files/}
+			[ -f "$f" ] || continue
+			if [ "$mode" = 100755 ]; then chmod 0755 "$f"; else chmod 0644 "$f"; fi
+		done
+		mksquashfs "$stage" "$OWRT_SQFS" -noappend -all-root -quiet -comp xz -b 256k \
+			-p '/dev/console c 600 0 0 5 1' >/dev/null
+	fi
+	echo "$key" > "$OWRT_SQFS.key"
+}
+
+# ---------------------------------------------------------------- sticks --
+
+# make_payload OUTDIR [make-install-stick.sh options]: install payload from
+# the OpenWrt fixture, with the fake c5-chainload.sh and re-made checksums.
+make_payload() {
+	local out=$1 vdir=$RUN/vdir/qemu-test
+	shift
+	rm -rf "$vdir" "$out"
+	mkdir -p "$vdir"
+	ln -s "$OWRT_SQFS" "$vdir/${OWRT_ART##*/}-root.squashfs"
+	ln -s "$OWRT_ART-kernel.uimage" "$vdir/${OWRT_ART##*/}-kernel.uimage"
+	ln -s "$OWRT_ART-sysupgrade.tar" "$vdir/${OWRT_ART##*/}-sysupgrade.tar"
+	"$QREPO/tools/make-install-stick.sh" "$@" "$vdir" "$out" > "$RUN/make-install-stick.log" 2>&1 || return 1
+	fake_chainload > "$out/chainload/c5-chainload.sh"
+	chmod 0755 "$out/chainload/c5-chainload.sh"
+	resum "$out"
+}
+
+# fixtures/fake-c5-chainload.sh with the repo's chainload/c5-chainload.sh
+# embedded as function c5cl_real (used for its "args" computation)
+fake_chainload() {
+	local f=$QDIR/fixtures/fake-c5-chainload.sh
+	head -n 1 "$f"
+	echo "c5cl_real() {"
+	echo "cat <<'C5CL_REAL_EOF'"
+	cat "$QREPO/chainload/c5-chainload.sh"
+	echo "C5CL_REAL_EOF"
+	echo "}"
+	tail -n +2 "$f"
+}
+
+resum() { # DIR: recompute SHA256SUMS/MD5SUMS over the files they list
+	local l
+	l=$(awk '{ f = $2; sub(/^\*/, "", f); print f }' "$1/SHA256SUMS")
+	(cd "$1" && printf '%s\n' "$l" | xargs -d '\n' sha256sum > SHA256SUMS.new &&
+		printf '%s\n' "$l" | xargs -d '\n' md5sum > MD5SUMS.new &&
+		mv SHA256SUMS.new SHA256SUMS && mv MD5SUMS.new MD5SUMS)
+}
+
+# make_stick DIR IMG: FAT32 stick image, one MBR partition (/dev/sda1)
+make_stick() {
+	local img=$2
+	rm -f "$img"
+	truncate -s 256M "$img"
+	echo '2048,,c' | sfdisk -q "$img" >/dev/null
+	mkfs.vfat -F 32 -n C5STICK --offset 2048 "$img" $((256 * 1024 - 1024)) >/dev/null
+	(cd "$1" && mcopy -s -m -i "$img@@1M" ./* ::/)
+}
+stick_cat() { mtype -i "$1@@1M" "::$2" 2>/dev/null; }
+
+# --------------------------------------------------------------- booting --
+
+# SPL emulator: the root device the Creator 5 Pro SPL would boot from DISK.
+spl_root() {
+	# the SPL compares the first 11 bytes with "ota:kernel2" (strncmp)
+	if [ "$(img_bytes "$1" "$(poff 5)" 11 | tr -d '\000')" = "ota:kernel2" ]; then
+		echo /dev/mmcblk0p4
+	else
+		echo /dev/mmcblk0p2
+	fi
+}
+
+# boot NAME DISK ROOT STEPSFILE [STICKIMG] -> runs one QEMU boot; returns the
+# driver's status. Console log: $RUN/NAME.log, command results: $RUN/NAME.res
+# ROOT is a root device (SPL-style command line) or "cmdline:<full command
+# line>" (what a chainload passes, see chainload_cmdline).
+boot() {
+	local name=$1 disk=$2 root=$3 steps=$4 stick=${5:-} extra='' rc cl
+	local -a q
+	BOOTN=$((BOOTN + 1))
+	[ -n "$stick" ] && extra=' qemu_stick=1'
+	case "$root" in
+	cmdline:*) cl=${root#cmdline:} ;;
+	# the SPL's fixed command line (minus mem=/rmem=/lpj=, which describe the
+	# X2600's memory map) + the X2600 kernel's built-in ieee754=relaxed
+	*) cl="console=ttyS0,115200n8 loglevel=8 init=/linuxrc root=$root rootwait rootfstype=squashfs ro ieee754=relaxed$extra" ;;
+	esac
+	# user-mode network on the malta PCnet NIC (eth0): OpenWrt's lan gets a
+	# DHCP address, which c5-booted requires before it commits
+	q=(qemu-system-mipsel -M malta -cpu "$QEMU_CPU" -m "$QEMU_MEM" -kernel "$VMLINUX"
+		-append "$cl"
+		-display none -monitor none -serial stdio -no-reboot
+		-nic user,model=pcnet,restrict=on
+		-drive "if=none,id=emmc,file=$disk,format=raw"
+		-device sdhci-pci -device sd-card,drive=emmc)
+	[ -n "$stick" ] && q+=(-drive "if=none,id=stick,file=$stick,format=raw" -device usb-storage,drive=stick)
+	say "boot $BOOTN '$name': $(echo "$cl" | grep -o 'root=[^ ]*')$(echo " $cl" | grep -o ' c5\.[^ ]*' | tr -d '\n') flag='$(img_flag "$disk")'${stick:+ stick=${stick##*/}}"
+	: > "$RUN/$name.res"
+	: > "$RUN/$name.log"
+	python3 "$QDIR/lib/qemu-run.py" --log "$RUN/$name.log" --results "$RUN/$name.res" \
+		--steps "$steps" --timeout "${QEMU_BOOT_TIMEOUT:-900}" -- "${q[@]}" 2>> "$RUN/scenario.log"
+	rc=$?
+	if [ "$rc" != 0 ]; then
+		say "  boot '$name' driver failed (rc=$rc): $(grep -A1 '^== FAIL' "$RUN/$name.res" | tail -n 1)"
+	fi
+	return "$rc"
+}
+
+# chainload_cmdline NAME -> "cmdline:<command line>" the fake chainload of
+# boot NAME handed over (for boot's ROOT argument)
+chainload_cmdline() {
+	local c
+	c=$(sed -n 's/^QEMU-CHAINLOAD root=[^ ]* cmdline=//p' "$RUN/$1.log" | tail -n 1)
+	[ -n "$c" ] && echo "cmdline:$c"
+}
+
+# result of a "run" step: res_rc NAME.res CMDNAME / res_out NAME.res CMDNAME
+res_rc() { sed -n "s/^== $2 rc=\([0-9]*\)$/\1/p" "$1" | tail -n 1; }
+res_out() { awk -v n="== $2 rc=" 'index($0, n) == 1 { on = 1; next } /^== / { on = 0 } on' "$1"; }
+
+# log grep helpers for checks
+log_has() { grep -qE -- "$2" "$RUN/$1.log"; }
+log_lacks() { ! grep -qE -- "$2" "$RUN/$1.log"; }

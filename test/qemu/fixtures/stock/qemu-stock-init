@@ -1,0 +1,49 @@
+#!/bin/sh
+# QEMU test stand-in for stock's rcS, run by stock busybox init (inittab
+# sysinit). Uses stock's own scripts where they exist:
+#   S08mdev (mdev daemon), S09mount_mmc_prog (usershare -> /usr/prog),
+#   S21mount_mmc_ext4 (userdata -> /usr/data), then /qemu-app-startup.sh =
+#   the USB-hook part of stock's app_startup.sh (generated at fixture build
+#   time; its "sleep 100000" stall prints a marker and exits instead).
+# Then an optional test action /usr/data/qemu-action.sh (injected by the
+# harness; stands in for commands a user would run over SSH) is run once.
+# Serial markers: QEMU-STOCK-*. Whatever happens next (reboot requested by
+# a script, or power-off) is decided by busybox init / /qemu-stock-finish.
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+# The QEMU kernel is a mainline 6.6; the installer insists on stock's kernel
+# release, which it reads through this documented override.
+export C5_UNAME_R=5.10.186+
+
+echo "QEMU-STOCK-INIT root=$(sed -n 's/.*root=\([^ ]*\).*/\1/p' /proc/cmdline)"
+/etc/init.d/S08mdev start
+
+# QEMU's UHCI + usb-storage enumerate more slowly than the printer's 2 s
+# "wait for USB" allows: wait (up to 60 s) for the stick the harness attached.
+n=0
+while [ "${qemu_stick:-0}" = 1 ] && [ ! -b /dev/sda ] && [ $n -lt 120 ]; do
+	sleep 0.5
+	n=$((n + 1))
+done
+n=0
+while [ ! -b /dev/mmcblk0p7 ] && [ $n -lt 60 ]; do
+	sleep 0.5
+	n=$((n + 1))
+done
+sleep 1
+
+/etc/init.d/S09mount_mmc_prog start
+/etc/init.d/S21mount_mmc_ext4 start
+grep -E ' /usr/(prog|data) ' /proc/mounts | sed 's/^/QEMU-STOCK-MOUNT /'
+
+sh /qemu-app-startup.sh
+echo "QEMU-STOCK-APP rc=$?"
+
+if [ -f /usr/data/qemu-action.sh ]; then
+	mv /usr/data/qemu-action.sh /tmp/qemu-action.sh
+	sync
+	echo "QEMU-STOCK-ACTION start"
+	sh /tmp/qemu-action.sh
+	echo "QEMU-STOCK-ACTION rc=$?"
+fi
+sync
+echo "QEMU-STOCK-DONE flag=$(head -c 11 "$(fdisk -l /dev/mmcblk0 | awk '$NF == "ota" { print "/dev/mmcblk0p" $1 }')" | tr -d '\000\n')"

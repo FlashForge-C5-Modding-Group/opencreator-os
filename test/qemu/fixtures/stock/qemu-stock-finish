@@ -1,0 +1,10 @@
+#!/bin/sh
+# inittab "once" action: reached only when nothing requested a reboot during
+# sysinit (busybox init handles a pending reboot signal before "once").
+# Stands in for "stock keeps running until the user power-cycles".
+echo "QEMU-STOCK-POWEROFF"
+sync
+mount -o remount,ro /usr/data 2>/dev/null
+mount -o remount,ro /usr/prog 2>/dev/null
+sync
+poweroff -f
