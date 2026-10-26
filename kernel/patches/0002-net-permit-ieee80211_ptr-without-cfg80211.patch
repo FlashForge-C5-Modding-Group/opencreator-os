@@ -1,0 +1,57 @@
+From: Christian Marangi <ansuelsmth@gmail.com>
+Subject: [PATCH] net: permit ieee80211_ptr even with no CFG80211 support
+
+Adapted for the Ingenic SDK 6.6 tree from OpenWrt v24.10.3
+target/linux/generic/pending-6.6/731-net-permit-ieee80211_ptr-even-with-no-CFG82111-suppo.patch
+(GPL-2.0, as the kernel). OpenWrt builds cfg80211/mac80211 out of tree
+(backports), so the kernel itself has CFG80211 off but must still carry
+net_device.ieee80211_ptr; CONFIG_CFG80211_HEADERS=y (OpenWrt generic config)
+keeps it.
+
+Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
+---
+diff -ruN a/include/linux/netdevice.h b/include/linux/netdevice.h
+--- a/include/linux/netdevice.h
++++ b/include/linux/netdevice.h
+@@ -2226,7 +2226,7 @@
+ #if IS_ENABLED(CONFIG_AX25)
+ 	void            *ax25_ptr;
+ #endif
+-#if IS_ENABLED(CONFIG_CFG80211)
++#if IS_ENABLED(CONFIG_CFG80211_HEADERS)
+ 	struct wireless_dev *ieee80211_ptr;
+ #endif
+ #if IS_ENABLED(CONFIG_IEEE802154) || IS_ENABLED(CONFIG_6LOWPAN)
+diff -ruN a/net/batman-adv/hard-interface.c b/net/batman-adv/hard-interface.c
+--- a/net/batman-adv/hard-interface.c
++++ b/net/batman-adv/hard-interface.c
+@@ -309,7 +309,7 @@
+ 	if (!net_device)
+ 		return false;
+ 
+-#if IS_ENABLED(CONFIG_CFG80211)
++#if IS_ENABLED(CONFIG_CFG80211_HEADERS)
+ 	/* cfg80211 drivers have to set ieee80211_ptr */
+ 	if (net_device->ieee80211_ptr)
+ 		return true;
+diff -ruN a/net/wireless/Kconfig b/net/wireless/Kconfig
+--- a/net/wireless/Kconfig
++++ b/net/wireless/Kconfig
+@@ -26,6 +26,7 @@
+ 	# using a different algorithm, though right now they shouldn't
+ 	# (this is here rather than below to allow it to be a module)
+ 	select CRYPTO_SHA256 if CFG80211_USE_KERNEL_REGDB_KEYS
++	select CFG80211_HEADERS
+ 	help
+ 	  cfg80211 is the Linux wireless LAN (802.11) configuration API.
+ 	  Enable this if you have a wireless device.
+@@ -36,6 +37,9 @@
+ 
+ 	  When built as a module it will be called cfg80211.
+ 
++config CFG80211_HEADERS
++	bool "cfg80211 - headers support"
++
+ if CFG80211
+ 
+ config NL80211_TESTMODE
