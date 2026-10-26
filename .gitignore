@@ -7,3 +7,6 @@ chainload/.*.cmd
 chainload/Module.symvers
 chainload/modules.order
 __pycache__/
+# Phase 0 output must never be committed (stock data)
+tools/printer/phase0/
+tools/printer/phase0-console.txt

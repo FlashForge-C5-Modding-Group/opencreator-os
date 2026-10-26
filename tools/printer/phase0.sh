@@ -74,7 +74,7 @@ strings -n 6 "$F/first-mib.bin" | grep -nE 'ota:kernel|root=/dev/mmcblk|U-Boot|c
 OTA=$(part_dev ota)
 if [ -n "$OTA" ]; then
 	dd if="$OTA" of="$F/ota-sector0.bin" bs=512 count=1 2>/dev/null
-	head -c 64 "$OTA" | od -A d -c > "$F/ota-sector0.txt"
+	head -c 64 "$OTA" | hexdump -C > "$F/ota-sector0.txt"
 fi
 
 ROOT=$(sed -n 's/.*[[:space:]]root=\([^[:space:]]*\).*/\1/p' /proc/cmdline)
@@ -89,7 +89,7 @@ for n in rootfs rootfs2; do
 	d=$(part_dev "$n")
 	[ -n "$d" ] || continue
 	magic=$(head -c 4 "$d")
-	used=$(od -An -t u8 -j 40 -N 8 "$d" | tr -d ' ')
+	used=$(hexdump -s 40 -n 4 -e '1/4 "%u"' "$d")	# busybox od lacks -A/-j
 	echo "$n magic=$magic bytes_used=$used" >> "$F/slots.txt"
 	[ "$magic" = hsqs ] && echo "$(head -c "$used" "$d" | sha256sum | cut -d' ' -f1)  $n.squashfs($used)" >> "$F/slot-sums.txt"
 done
