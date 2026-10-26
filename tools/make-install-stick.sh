@@ -17,7 +17,7 @@
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
-PREFIX=opencreator-os-x2600-generic-flashforge_creator5pro
+PREFIX=opencreator-os-x2600-generic-flashforge_creator5pro-squashfs
 FLIP=0 CHAIN=0 KEYS=
 
 usage() { sed -n '2,16s/^# \{0,1\}//p' "$0"; }
