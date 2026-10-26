@@ -137,6 +137,18 @@ flag_write() {
 	[ "$(flag_read)" = "$fw_s" ]
 }
 
+# flag_ensure_own SLOT: before writing any partition, the boot flag must name
+# the running slot, so a power loss mid-write still boots stock. Rewrites it
+# (with read-back) when it names the other slot, e.g. after
+# switch-to-openwrt.sh --no-reboot.
+flag_ensure_own() {
+	fe_now=$(flag_slot) || return 1
+	[ "$fe_now" = "$1" ] && return 0
+	log "flag: boot flag names slot $fe_now ('$(flag_read)') but slot $1 is running; pointing it back at slot $1 before writing"
+	flag_write "$1" || { log "flag: write to slot $1 FAILED (now '$(flag_read)')"; return 1; }
+	log "flag: boot flag -> slot $1 ('$(flag_read)')"
+}
+
 # --- images and checksums ------------------------------------------------------
 
 # magic_hex FILE -> first 4 bytes as lowercase hex

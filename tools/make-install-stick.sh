@@ -4,7 +4,7 @@
 #   tools/make-install-stick.sh [--flip | --chainload] [--authorized-keys FILE] VERSION_DIR OUTDIR
 #
 # VERSION_DIR  build output, e.g. /mnt/f/creator5-dev/opencreator-os-builds/<ver>,
-#              holding openwrt-x2600-generic-flashforge_creator5pro-*
+#              holding opencreator-os-x2600-generic-flashforge_creator5pro-*
 # OUTDIR       new or empty directory; its contents go to the stick root
 # --flip       add opencreator-os/FLIP: switch the boot flag after the write
 # --chainload  add opencreator-os/CHAINLOAD: after the write, test-boot
@@ -17,7 +17,7 @@
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
-PREFIX=openwrt-x2600-generic-flashforge_creator5pro
+PREFIX=opencreator-os-x2600-generic-flashforge_creator5pro
 FLIP=0 CHAIN=0 KEYS=
 
 usage() { sed -n '2,16s/^# \{0,1\}//p' "$0"; }
@@ -59,6 +59,27 @@ if [ -e "$OUT" ] && [ -n "$(ls -A "$OUT")" ]; then
 	die "$OUT exists and is not empty"
 fi
 
+# Payload checks (install.sh insists on the same) before anything is copied.
+KIMG=$VDIR/$PREFIX-kernel.uimage
+[ "$(head -c 4 "$KIMG" | od -An -tx1 | tr -d ' \n')" = 27051956 ] || die "kernel.uimage is not a uImage"
+[ "$(head -c 4 "$VDIR/$PREFIX-root.squashfs")" = hsqs ] || die "root.squashfs is not squashfs"
+
+# chainload.ko skips the 64-byte uImage header and refuses a payload whose
+# page-rounded size exceeds SAFE_MIN - LOAD_PHYS (chainload/chainload_main.c).
+cl_const() {
+	awk -v n="$1" '$1 == "#define" && $2 == n { v = $3; sub(/[uUlL]+$/, "", v); print v; exit }' "$REPO/chainload/chainload_main.c"
+}
+LOAD_PHYS=$(cl_const LOAD_PHYS) SAFE_MIN=$(cl_const SAFE_MIN)
+[[ "$LOAD_PHYS" =~ ^0x[0-9a-fA-F]+$ && "$SAFE_MIN" =~ ^0x[0-9a-fA-F]+$ ]] ||
+	die "cannot read LOAD_PHYS/SAFE_MIN from chainload/chainload_main.c"
+CL_LIMIT=$((SAFE_MIN - LOAD_PHYS))
+KSZ=$(stat -c %s "$KIMG")
+KPAY=$(((KSZ - 64 + 4095) / 4096 * 4096))
+if [ "$KSZ" -le 64 ] || [ "$KPAY" -gt "$CL_LIMIT" ]; then
+	die "kernel.uimage payload $((KSZ - 64)) bytes ($KPAY page-rounded) exceeds the chainload limit $CL_LIMIT (SAFE_MIN $SAFE_MIN - LOAD_PHYS $LOAD_PHYS)"
+fi
+echo "kernel.uimage payload $KPAY of $CL_LIMIT bytes (chainload limit)"
+
 mkdir -p "$OUT/opencreator-os/fb" "$OUT/chainload"
 install -m 0755 "$REPO/installer/runFirmwareExe.sh" "$OUT/"
 install -m 0755 "$REPO/installer/opencreator-os/install.sh" "$REPO/installer/opencreator-os/switch-to-openwrt.sh" "$OUT/opencreator-os/"
@@ -70,10 +91,6 @@ done
 install -m 0644 "$REPO/chainload/out/chainload.ko" "$OUT/chainload/"
 install -m 0755 "$REPO/chainload/c5-chainload.sh" "$OUT/chainload/"
 basename "$(cd "$VDIR" && pwd)" > "$OUT/VERSION"
-
-# Magic checks: what install.sh will insist on anyway.
-[ "$(head -c 4 "$OUT/kernel.uimage" | od -An -tx1 | tr -d ' \n')" = 27051956 ] || die "kernel.uimage is not a uImage"
-[ "$(head -c 4 "$OUT/root.squashfs")" = hsqs ] || die "root.squashfs is not squashfs"
 
 LIST=$(mktemp)
 trap 'rm -f "$LIST"' EXIT

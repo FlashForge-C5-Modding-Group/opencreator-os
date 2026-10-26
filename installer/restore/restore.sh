@@ -169,7 +169,10 @@ fi
 for w in $WRITES; do
 	log "check: would write ${w#*:} -> ${w%%:*} ($(part_dev "${w%%:*}"))"
 done
-[ -z "$FLAG_TO" ] || log "check: would point the boot flag at slot $FLAG_TO"
+if [ -n "$WRITES" ] && [ "$(flag_slot)" != "$OWN" ]; then
+	log "check: boot flag names slot $(flag_slot); would point it back at the running slot $OWN before writing"
+fi
+[ -z "$FLAG_TO" ] || log "check: would point the boot flag at slot $FLAG_TO after all writes are verified"
 if [ "$CHECK" = 1 ]; then
 	log "check: OK"
 	exit 0
@@ -178,6 +181,11 @@ fi
 # --- writes ---------------------------------------------------------------------
 
 show restoring
+# A power loss mid-write must boot the running (intact) slot: the flag names
+# it before the first write; a requested flag change follows the writes.
+if [ -n "$WRITES" ]; then
+	flag_ensure_own "$OWN" || fail "cannot point the boot flag at the running slot $OWN; nothing written"
+fi
 for w in $WRITES; do
 	name=${w%%:*} img=${w#*:}
 	dev=$(part_dev "$name")

@@ -93,7 +93,8 @@ preflight() {
 	done
 	OWN=$(own_slot) || abort "root=$(cmdline_root) is neither GPT rootfs ($(part_dev rootfs)) nor rootfs2 ($(part_dev rootfs2))"
 	FLAG=$(flag_slot) || abort "cannot read the boot flag"
-	[ "$FLAG" = "$OWN" ] || abort "boot flag and running root disagree (flag: slot $FLAG '$(flag_read)', running: slot $OWN)"
+	# a flag naming the other slot (e.g. switch-to-openwrt.sh --no-reboot) is
+	# pointed back at the running slot before the first partition write
 	TGT=$(other_slot "$OWN")
 	OKDEV=$(part_dev "$(slot_kname "$OWN")")
 	ORDEV=$(part_dev "$(slot_rname "$OWN")")
@@ -115,8 +116,16 @@ preflight() {
 	[ "$(magic_str "$STICK/root.squashfs")" = "$SQUASHFS_MAGIC" ] || abort "root.squashfs is not a squashfs image"
 	KSZ=$(file_bytes "$STICK/kernel.uimage")
 	RSZ=$(file_bytes "$STICK/root.squashfs")
+	[ "$KSZ" -gt 64 ] || abort "kernel.uimage ($KSZ bytes) is too small"
 	[ "$KSZ" -le "$TKB" ] || abort "kernel.uimage ($KSZ bytes) does not fit $TK ($TKB bytes)"
 	[ "$RSZ" -le "$TRB" ] || abort "root.squashfs ($RSZ bytes) does not fit $TR ($TRB bytes)"
+	# chainload.ko (chainload/chainload_main.c) skips the 64-byte uImage header
+	# and refuses a payload whose 4 KiB-page-rounded size exceeds
+	# SAFE_MIN - LOAD_PHYS = 0x01600000 - 0x00f00000 = 7 MiB (its copy to
+	# LOAD_PHYS must stay below the staging pages). Keep in sync with it.
+	CL_LIMIT=7340032
+	kpay=$(((KSZ - 64 + 4095) / 4096 * 4096))
+	[ "$kpay" -le "$CL_LIMIT" ] || abort "kernel.uimage payload ($((KSZ - 64)) bytes, $kpay page-rounded) exceeds the chainload limit of $CL_LIMIT bytes"
 
 	[ -s "$STICK/$SUMS" ] || abort "$SUMS missing in $STICK"
 	KSUM=$(sums_get "$STICK/$SUMS" kernel.uimage)
@@ -127,6 +136,10 @@ preflight() {
 	if [ "$(dev_sum "$TK" "$KSZ")" = "$KSUM" ] && [ "$(dev_sum "$TR" "$RSZ")" = "$RSUM" ]; then
 		UP_TO_DATE=1
 	fi
+	# a previous install of this slot stopped after the image writes but
+	# before the overlay header was cleared: redo the cleanup
+	PENDING=0
+	grep -qx "slot=$TGT" "$OCDIR/install-pending" 2>/dev/null && PENDING=1
 	# identifies one chainload test request: the payload plus the CHAINLOAD
 	# marker's contents (edit the marker to request another test)
 	CL_KEY=$({ cat "$STICK/$SUMS"; cat "$STICK/opencreator-os/CHAINLOAD" 2>/dev/null; } | "$SUM" | cut -c1-16)
@@ -264,10 +277,25 @@ copy_chainload() {
 }
 
 write_slot() {
-	if [ "$UP_TO_DATE" = 1 ]; then
+	if [ "$UP_TO_DATE" = 1 ] && [ "$PENDING" = 0 ]; then
 		log "write: slot $TGT already up to date ($TK, $TR match the payload); not rewriting"
 		return 0
 	fi
+	if [ "$UP_TO_DATE" = 1 ]; then
+		log "write: slot $TGT matches the payload but the previous install did not finish (install-pending); redoing the overlay cleanup"
+	else
+		# transaction marker: removed only after the overlay header is cleared
+		printf 'slot=%s\nrootfs=%s\nversion=%s\n' "$TGT" "$TR" "$VERSION" > "$OCDIR/install-pending" ||
+			fail "cannot write $OCDIR/install-pending"
+		sync
+		write_images
+	fi
+	clear_overlay
+	rm -f "$OCDIR/install-pending" || fail "cannot remove $OCDIR/install-pending"
+	sync
+}
+
+write_images() {
 	log "write: kernel.uimage ($KSZ bytes) -> $TK"
 	dd if="$STICK/kernel.uimage" of="$TK" bs=1M conv=fsync,notrunc 2>/dev/null || fail "dd to $TK failed"
 	log "write: root.squashfs ($RSZ bytes) -> $TR"
@@ -276,9 +304,12 @@ write_slot() {
 	[ "$(dev_sum "$TK" "$KSZ")" = "$KSUM" ] || fail "read-back mismatch on $TK"
 	[ "$(dev_sum "$TR" "$RSZ")" = "$RSUM" ] || fail "read-back mismatch on $TR"
 	log "write: slot $TGT written and read back OK ($SUM)"
-	# fstools puts the overlay (rootfs_data) right after the squashfs, at
-	# bytes_used rounded up to 64 KiB; wipe any stale ext4 superblock there so
-	# the first boot formats a fresh overlay.
+}
+
+# fstools puts the overlay (rootfs_data) right after the squashfs, at
+# bytes_used rounded up to 64 KiB; wipe any stale ext4 superblock there so
+# the first boot formats a fresh overlay.
+clear_overlay() {
 	bu=$(squashfs_bytes "$STICK/root.squashfs") || fail "cannot read bytes_used of root.squashfs"
 	off=$(((bu + 65535) / 65536 * 65536))
 	if [ $((off + 4096)) -le "$TRB" ]; then
@@ -366,7 +397,12 @@ fi
 
 if [ "$STOCK_SAVED" = 1 ]; then save_plan="already saved in $SD"; else save_plan="would save $OKDEV ($OKB bytes) + $ORDEV ($BU bytes) to $SD"; fi
 log "check: running slot $OWN ($OKDEV, $ORDEV), boot flag slot $FLAG"
-if [ "$UP_TO_DATE" = 1 ]; then
+if [ "$FLAG" != "$OWN" ]; then
+	log "check: boot flag names slot $FLAG ('$(flag_read)'); would point it back at the running slot $OWN before writing"
+fi
+if [ "$UP_TO_DATE" = 1 ] && [ "$PENDING" = 1 ]; then
+	log "check: slot $TGT matches the payload but a previous install did not finish; would redo the overlay cleanup on $TR"
+elif [ "$UP_TO_DATE" = 1 ]; then
 	log "check: slot $TGT already up to date: $TK (kernel, $KSZ bytes) and $TR (rootfs, $RSZ bytes) match; no write"
 else
 	log "check: would write slot $TGT: $TK (kernel, $KSZ of $TKB bytes) and $TR (rootfs, $RSZ of $TRB bytes)"
@@ -402,6 +438,7 @@ mkdir -p "$OCDIR" || fail "cannot create $OCDIR"
 save_stock
 save_wifi
 copy_chainload
+flag_ensure_own "$OWN" || fail "cannot point the boot flag at the running slot $OWN; nothing written to slot $TGT"
 write_slot
 
 prev_flip=$(grep -x "flipped slot=$TGT version=$VERSION" "$OCDIR/install.state" 2>/dev/null)
