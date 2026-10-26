@@ -3,13 +3,16 @@
 # sh, root) and writes OpenWrt into the eMMC slot stock is NOT running from.
 # The boot flag is left on stock unless --flip (or a FLIP marker) is given.
 #
-#   sh install.sh [--from-stick DIR] [--check] [--flip] [--yes] [--hook]
+#   sh install.sh [--from-stick DIR] [--check] [--flip | --chainload] [--yes] [--hook]
 #
 #   --from-stick DIR  payload directory (default: the directory above this
 #                     script, i.e. the stick root)
 #   --check           run every precondition, print the plan, write nothing
 #   --flip            after a verified write, point the boot flag at OpenWrt
 #                     and reboot (same as a file opencreator-os/FLIP on the stick)
+#   --chainload       after a verified write (or when the slot is already up
+#                     to date), test-boot OpenWrt from RAM with c5-chainload.sh;
+#                     the boot flag stays on stock (same as opencreator-os/CHAINLOAD)
 #   --yes             do not ask for confirmation
 #   --hook            started by the stock USB hook (runFirmwareExe.sh):
 #                     implies --yes, pauses on the result screen, and exits 1
@@ -18,13 +21,14 @@
 #
 # Payload in DIR: kernel.uimage root.squashfs sysupgrade.tar VERSION
 # chainload/chainload.ko chainload/c5-chainload.sh SHA256SUMS MD5SUMS,
-# optional opencreator-os/authorized_keys and opencreator-os/FLIP.
+# optional opencreator-os/authorized_keys, opencreator-os/FLIP and
+# opencreator-os/CHAINLOAD.
 set -u
 
-usage() { sed -n '2,23s/^# \{0,1\}//p' "$0"; }
+usage() { sed -n '2,25s/^# \{0,1\}//p' "$0"; }
 
 SELF_DIR=$(cd "$(dirname "$0")" && pwd) || exit 1
-STICK='' CHECK=0 FLIP=0 YES=0 HOOK=0
+STICK='' CHECK=0 FLIP=0 CHAIN=0 YES=0 HOOK=0
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--from-stick)
@@ -34,6 +38,7 @@ while [ $# -gt 0 ]; do
 		;;
 	--check) CHECK=1 ;;
 	--flip) FLIP=1 ;;
+	--chainload) CHAIN=1 ;;
 	--yes) YES=1 ;;
 	--hook) HOOK=1 YES=1 ;;
 	-h | --help) usage; exit 0 ;;
@@ -50,6 +55,7 @@ FBDIR=$SELF_DIR/fb
 . "$SELF_DIR/lib.sh"
 
 [ -f "$STICK/opencreator-os/FLIP" ] && FLIP=1
+[ -f "$STICK/opencreator-os/CHAINLOAD" ] && CHAIN=1
 SD=$OCDIR/stock
 MIN_FREE=$((64 * 1024 * 1024))
 VERSION=$(head -n 1 "$STICK/VERSION" 2>/dev/null | tr -d '\r')
@@ -117,6 +123,13 @@ preflight() {
 	RSUM=$(sums_get "$STICK/$SUMS" root.squashfs)
 	if [ -z "$KSUM" ] || [ -z "$RSUM" ]; then abort "$SUMS does not list kernel.uimage and root.squashfs"; fi
 	bad=$(sums_verify "$STICK" "$SUMS") || abort "payload checksum mismatch ($SUMS): ${bad:-empty list}"
+	UP_TO_DATE=0
+	if [ "$(dev_sum "$TK" "$KSZ")" = "$KSUM" ] && [ "$(dev_sum "$TR" "$RSZ")" = "$RSUM" ]; then
+		UP_TO_DATE=1
+	fi
+	# identifies one chainload test request: the payload plus the CHAINLOAD
+	# marker's contents (edit the marker to request another test)
+	CL_KEY=$({ cat "$STICK/$SUMS"; cat "$STICK/opencreator-os/CHAINLOAD" 2>/dev/null; } | "$SUM" | cut -c1-16)
 
 	# running stock slot, saved to userdata before anything is written
 	[ "$(magic_str "$ORDEV")" = "$SQUASHFS_MAGIC" ] || abort "running rootfs $ORDEV is not squashfs"
@@ -135,7 +148,7 @@ preflight() {
 	if [ "${C5_NO_MOUNTPOINT:-0}" != 1 ]; then
 		mountpoint -q "$C5_DATA" || abort "$C5_DATA is not mounted"
 	fi
-	need=$((KSZ + 2 * 1024 * 1024))
+	need=$((KSZ + 6 * 1024 * 1024))
 	[ "$STOCK_SAVED" = 1 ] || need=$((need + OKB + BU))
 	[ "$need" -ge "$MIN_FREE" ] || need=$MIN_FREE
 	free=$(free_bytes "$C5_DATA") || abort "cannot read free space on $C5_DATA"
@@ -244,13 +257,15 @@ copy_chainload() {
 		want=$(sums_get "$STICK/$SUMS" "$f")
 		[ -z "$want" ] || [ "$(file_sum "$OCDIR/chainload/${f##*/}")" = "$want" ] || fail "copy of $f is corrupt"
 	done
+	# screens shown after the stick is unmounted (chainload test)
+	mkdir -p "$OCDIR/fb" && cp "$FBDIR/chainload.raw" "$FBDIR/chainload-failed.raw" "$OCDIR/fb/" 2>/dev/null
 	sync
 	log "chainload: chainload.ko, c5-chainload.sh, kernel.uimage copied to $OCDIR/chainload"
 }
 
 write_slot() {
-	if [ "$(dev_sum "$TK" "$KSZ")" = "$KSUM" ] && [ "$(dev_sum "$TR" "$RSZ")" = "$RSUM" ]; then
-		log "write: slot $TGT already holds this payload ($TK, $TR); not rewriting"
+	if [ "$UP_TO_DATE" = 1 ]; then
+		log "write: slot $TGT already up to date ($TK, $TR match the payload); not rewriting"
 		return 0
 	fi
 	log "write: kernel.uimage ($KSZ bytes) -> $TK"
@@ -273,19 +288,106 @@ write_slot() {
 	fi
 }
 
+# log_lines PREFIX TEXT: log every non-empty line of TEXT
+log_lines() {
+	printf '%s\n' "$2" | while IFS= read -r ll; do
+		if [ -n "$ll" ]; then log "$1$ll"; fi
+	done
+}
+
+# release_stick: flush and unmount the stick when it is a mount point (the
+# stock hook mounts it at /mnt). This script runs from it, so a plain umount
+# is usually busy; a lazy umount detaches it and the open script stays
+# readable. Later log lines go to $OCDIR/install.log only.
+release_stick() {
+	mountpoint -q "$STICK" 2>/dev/null || return 0
+	rs_dir=$STICK
+	STICK=''
+	sync
+	if umount "$rs_dir" 2>/dev/null; then
+		log "chainload: unmounted $rs_dir"
+	elif umount -l "$rs_dir" 2>/dev/null; then
+		log "chainload: $rs_dir busy (this script runs from it); lazily unmounted"
+	else
+		log "chainload: could not unmount $rs_dir"
+	fi
+}
+
+# chainload_test: stage the target slot's kernel with root= on the target
+# rootfs and jump into it from RAM. The eMMC and the boot flag are untouched.
+chainload_test() {
+	cl=$OCDIR/chainload/c5-chainload.sh
+	show chainload
+	log "chainload: staging $OCDIR/chainload/kernel.uimage with root=$TR"
+	if ! cl_out=$(sh "$cl" stage "$TR" 2>&1); then
+		log_lines "chainload: " "$cl_out"
+		log "chainload: stage FAILED; last kernel messages:"
+		log_lines "dmesg: " "$(dmesg 2>/dev/null | tail -n 30)"
+		log "install: FAILED chainload test; slot $TGT stays written, boot flag on stock (slot $OWN)"
+		finish failed 1
+	fi
+	log_lines "chainload: " "$cl_out"
+	echo "chainload slot=$TGT key=$CL_KEY version=$VERSION" >> "$OCDIR/install.state"
+	log "chainload: staged; jumping into OpenWrt from RAM (boot flag stays on stock, slot $OWN)"
+	log "chainload: no OpenWrt within 3 minutes -> power-cycle; stock boots and this test is not repeated"
+	sync
+	release_stick
+	sync
+	if [ "$HOOK" = 1 ]; then
+		# "go" backgrounds go-now and returns, and go-now kills every process
+		# whose command line mentions opencreator (this script): the hook would
+		# return and stock would resume booting while the jump is prepared.
+		# Run go-now in the foreground under a command line naming
+		# c5-chainload, which go-now spares. It returns only if the jump was
+		# refused; stock is half shut down then, so show that and stall
+		# (exit 0 makes the stock hook sleep) until the user power-cycles.
+		# shellcheck disable=SC2016
+		exec sh -c 'sh "$1" go-now; if [ -e "$3" ]; then cat "$2" > "$3" 2>/dev/null; fi; exit 0' \
+			c5-chainload "$cl" "$OCDIR/fb/chainload-failed.raw" "$C5_FB"
+	fi
+	sh "$cl" go
+	exit 0
+}
+
 # --- main ------------------------------------------------------------------------
 
-log "install: opencreator-os $VERSION from $STICK (check=$CHECK flip=$FLIP hook=$HOOK)"
+log "install: opencreator-os $VERSION from $STICK (check=$CHECK flip=$FLIP chainload=$CHAIN hook=$HOOK)"
+[ "$FLIP" = 1 ] && [ "$CHAIN" = 1 ] && abort "FLIP and CHAINLOAD are both set; use one of them"
 preflight
+
+# A hook-run chainload test that already ran for this request and left stock
+# running (the test hung and was power-cycled, or OpenWrt failed its health
+# check) is not repeated, so a power cycle really returns to stock.
+CHAIN_DONE=0
+if [ "$CHAIN" = 1 ] && [ "$HOOK" = 1 ] &&
+	grep -q "^chainload slot=$TGT key=$CL_KEY " "$OCDIR/install.state" 2>/dev/null; then
+	CHAIN_DONE=1
+fi
 
 if [ "$STOCK_SAVED" = 1 ]; then save_plan="already saved in $SD"; else save_plan="would save $OKDEV ($OKB bytes) + $ORDEV ($BU bytes) to $SD"; fi
 log "check: running slot $OWN ($OKDEV, $ORDEV), boot flag slot $FLAG"
-log "check: would write slot $TGT: $TK (kernel, $KSZ of $TKB bytes) and $TR (rootfs, $RSZ of $TRB bytes)"
+if [ "$UP_TO_DATE" = 1 ]; then
+	log "check: slot $TGT already up to date: $TK (kernel, $KSZ bytes) and $TR (rootfs, $RSZ bytes) match; no write"
+else
+	log "check: would write slot $TGT: $TK (kernel, $KSZ of $TKB bytes) and $TR (rootfs, $RSZ of $TRB bytes)"
+fi
 log "check: stock: $save_plan"
 log "check: flip boot flag afterwards: $([ "$FLIP" = 1 ] && echo yes || echo no)"
+if [ "$CHAIN_DONE" = 1 ]; then
+	log "check: chainload test afterwards: no (already ran for this stick, key $CL_KEY)"
+else
+	log "check: chainload test afterwards: $([ "$CHAIN" = 1 ] && echo "yes (root=$TR)" || echo no)"
+fi
 if [ "$CHECK" = 1 ]; then
 	log "check: OK"
 	exit 0
+fi
+
+if [ "$CHAIN_DONE" = 1 ]; then
+	log "chainload: this stick's test boot already ran (key $CL_KEY) and stock is running again:"
+	log "chainload: the test hung, or OpenWrt failed its health check (see $OCDIR/logs/ if it got that far)"
+	log "chainload: not repeating it; to test again, edit or re-create opencreator-os/CHAINLOAD on the stick"
+	finish written 1
 fi
 
 if [ "$YES" != 1 ]; then
@@ -303,9 +405,11 @@ copy_chainload
 write_slot
 
 prev_flip=$(grep -x "flipped slot=$TGT version=$VERSION" "$OCDIR/install.state" 2>/dev/null)
+prev_chain=$(grep "^chainload slot=$TGT " "$OCDIR/install.state" 2>/dev/null)
 {
 	echo "written slot=$TGT kernel=$TK rootfs=$TR version=$VERSION"
 	[ -z "$prev_flip" ] || echo "$prev_flip"
+	[ -z "$prev_chain" ] || echo "$prev_chain"
 } > "$OCDIR/install.state"
 sync
 
@@ -331,6 +435,7 @@ if [ "$FLIP" = 1 ]; then
 fi
 
 log "install: OK; slot $TGT written, boot flag still on stock (slot $OWN)"
+[ "$CHAIN" = 1 ] && chainload_test
 log "next: test-boot it from stock without touching the flag:"
 log "next:   sh $OCDIR/chainload/c5-chainload.sh stage $TR && sh $OCDIR/chainload/c5-chainload.sh go"
 log "next: or switch for real: sh $SELF_DIR/switch-to-openwrt.sh (or re-run with --flip / a FLIP marker)"
