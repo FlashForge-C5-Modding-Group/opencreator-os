@@ -10,25 +10,38 @@
 #                                           network down and jump (no return)
 #   c5-chainload.sh unstage                 rmmod chainload
 #   c5-chainload.sh status                  staged? parameters, dmesg lines
-#   c5-chainload.sh args ROOTDEV            print the computed cmdline,
-#                                           safe_max and krp; changes nothing
+#   c5-chainload.sh args ROOTDEV [IMAGE]    print the computed cmdline,
+#                                           safe_max, krp and the commit
+#                                           decision; changes nothing
 #
 # ROOTDEV is the OpenWrt squashfs root as the new kernel will name it, e.g.
 # /dev/mmcblk0p4 (eMMC slot) or /dev/sda1 (USB stick test).
 #
+# Commit: a healthy OpenWrt boot from an eMMC slot points the boot flag at
+# that slot (c5-booted), so the SPL will boot the slot's own kernel next.
+# That is only allowed when the staged IMAGE is that kernel: ROOTDEV is the
+# GPT rootfs (rootfs2) partition and IMAGE is a uImage byte-identical to
+# the GPT kernel (kernel2) partition over the uImage length (64 + ih_size),
+# with no trailing bytes. Otherwise "c5.nocommit=1" is added to the command
+# line and the test boot leaves the flag alone.
+#
 # Files: chainload.ko and kernel.uimage in the same directory as this script
 # (normally /usr/data/opencreator-os/chainload/). BusyBox ash.
 # Test overrides: C5CL_CMDLINE, C5CL_IOMEM, C5CL_KALLSYMS name the files
-# read instead of /proc/cmdline, /proc/iomem, /proc/kallsyms.
+# read instead of /proc/cmdline, /proc/iomem, /proc/kallsyms; C5CL_DISK
+# (/dev/mmcblk0), C5CL_FDISK (fdisk), C5CL_DEVROOT (prefix for reading
+# partition devices, empty).
 
 DIR=$(cd "$(dirname "$0")" && pwd)
 CMDLINE_FILE=${C5CL_CMDLINE:-/proc/cmdline}
 IOMEM_FILE=${C5CL_IOMEM:-/proc/iomem}
 KALLSYMS_FILE=${C5CL_KALLSYMS:-/proc/kallsyms}
+DISK=${C5CL_DISK:-/dev/mmcblk0}
+FDISK=${C5CL_FDISK:-fdisk}
+DEVROOT=${C5CL_DEVROOT:-}
 LOWMEM_TOP=$((0x10000000))
 SAFE_GAP=$((16 << 20))
 SAFE_FLOOR=$((0x01600000 + (8 << 20) + (1 << 20)))	# chainload.ko lower limit
-
 die() { echo "c5-chainload: $*" >&2; exit 1; }
 staged() { grep -q '^chainload ' /proc/modules; }
 
@@ -51,7 +64,8 @@ safe_max() {
 }
 
 # Stock command line with root= replaced; init=, rootfstype= and the rest
-# kept; rootwait and ieee754=relaxed appended when absent.
+# kept (c5.* words dropped); rootwait and ieee754=relaxed appended when
+# absent, and c5.nocommit=1 unless $commit is 1.
 build_cmdline() {
 	cl=""
 	have_root=0
@@ -61,6 +75,7 @@ build_cmdline() {
 	for w in $line; do
 		case "$w" in
 		root=*) w="root=$1"; have_root=1 ;;
+		c5.*) continue ;;
 		esac
 		cl="$cl${cl:+ }$w"
 	done
@@ -68,7 +83,54 @@ build_cmdline() {
 	[ "$have_root" = 1 ] || cl="$cl root=$1"
 	case " $cl " in *" rootwait "*) ;; *) cl="$cl rootwait" ;; esac
 	case " $cl " in *" ieee754=relaxed "*) ;; *) cl="$cl ieee754=relaxed" ;; esac
+	[ "$commit" = 1 ] || cl="$cl c5.nocommit=1"
 	echo "$cl"
+}
+
+magic_hex() { head -c 4 "$1" 2>/dev/null | hexdump -ve '1/1 "%02x"'; }
+
+# fdisk -l rows "NR START END SIZE ... NAME" (the listing stock's OTA
+# scripts parse); GPT name of partition number $1 / number of name $1.
+part_name() {
+	"$FDISK" -l "$DISK" 2>/dev/null |
+		awk -v n="$1" '$1 == n && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ { print $NF; exit }'
+}
+part_nr() {
+	"$FDISK" -l "$DISK" 2>/dev/null |
+		awk -v n="$1" '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ && $NF == n { print $1; c++ }
+			END { if (c != 1) exit 1 }'
+}
+
+# check_commit ROOTDEV IMAGE: commit=1 when IMAGE is exactly the kernel
+# stored in the eMMC slot of ROOTDEV, else commit=0. commit_why says why.
+check_commit() {
+	commit=0
+	case "$1" in
+	"$DISK"p[0-9]*) ;;
+	*) commit_why="$1 is not a partition of $DISK"; return 0 ;;
+	esac
+	cc_nr=${1#"$DISK"p}
+	case "$cc_nr" in *[!0-9]*) commit_why="$1 is not a partition of $DISK"; return 0 ;; esac
+	cc_rname=$(part_name "$cc_nr")
+	case "$cc_rname" in
+	rootfs) cc_kname=kernel ;;
+	rootfs2) cc_kname=kernel2 ;;
+	*) commit_why="$1 is GPT '${cc_rname:-?}', not rootfs/rootfs2"; return 0 ;;
+	esac
+	cc_knr=$(part_nr "$cc_kname") || { commit_why="GPT partition $cc_kname not found (or not unique)"; return 0; }
+	cc_kdev=${DISK}p$cc_knr
+	[ "$(magic_hex "$2")" = 27051956 ] || { commit_why="$2 is not a uImage"; return 0; }
+	[ "$(magic_hex "$DEVROOT$cc_kdev")" = 27051956 ] || { commit_why="$cc_kdev ($cc_kname) holds no uImage"; return 0; }
+	cc_hs=$(head -c 16 "$2" | tail -c 4 | hexdump -ve '1/1 "%02x"')
+	[ "${#cc_hs}" = 8 ] || { commit_why="cannot read the uImage size of $2"; return 0; }
+	cc_len=$((64 + 0x$cc_hs))
+	[ "$(wc -c < "$2" | tr -d ' ')" = "$cc_len" ] ||
+		{ commit_why="$2 is not exactly one uImage ($cc_len bytes by its header)"; return 0; }
+	if command -v sha256sum > /dev/null 2>&1; then cc_sum=sha256sum; else cc_sum=md5sum; fi
+	[ "$(head -c "$cc_len" "$2" | $cc_sum | cut -d' ' -f1)" = "$(head -c "$cc_len" "$DEVROOT$cc_kdev" | $cc_sum | cut -d' ' -f1)" ] ||
+		{ commit_why="$2 differs from $cc_kdev ($cc_kname)"; return 0; }
+	commit=1
+	commit_why="$2 equals $cc_kdev ($cc_kname, $cc_len bytes, $cc_sum)"
 }
 
 # Address of kernel_restart_prepare; lifts kptr_restrict while reading if
@@ -94,18 +156,28 @@ compute() {
 	rootdev=$1
 	case "$rootdev" in /dev/?*) ;; *) die "ROOTDEV must be a /dev path, got '$rootdev'" ;; esac
 	[ "$rootdev" != "$(running_root)" ] || die "$rootdev is the running stock root"
+	check_commit "$rootdev" "$2"
 	cmdline=$(build_cmdline "$rootdev")
 	case "$cmdline" in *'"'*) die "command line contains a double quote" ;; esac
 	sm=$(safe_max) || die "no System RAM range starting below 256 MiB in $IOMEM_FILE, or it ends below $(printf '0x%08x' $((SAFE_FLOOR + SAFE_GAP)))"
 	krp=$(find_krp) || die "kernel_restart_prepare address not readable in $KALLSYMS_FILE"
 }
 
+commit_text() {
+	if [ "$commit" = 1 ]; then
+		echo "yes: a healthy boot makes this slot the default ($commit_why)"
+	else
+		echo "no (c5.nocommit=1): $commit_why"
+	fi
+}
+
 cmd_args() {
-	[ -n "$1" ] || die "usage: $0 args ROOTDEV"
-	compute "$1"
+	[ -n "$1" ] || die "usage: $0 args ROOTDEV [IMAGE]"
+	compute "$1" "${2:-$DIR/kernel.uimage}"
 	echo "cmdline=$cmdline"
 	echo "safe_max=$sm"
 	echo "krp=$krp"
+	echo "commit=$(commit_text)"
 }
 
 cmd_stage() {
@@ -115,7 +187,7 @@ cmd_stage() {
 	[ -f "$DIR/chainload.ko" ] || die "no $DIR/chainload.ko"
 	[ -f "$img" ] || die "no image $img"
 	staged && die "already staged (run: $0 unstage)"
-	compute "$1"
+	compute "$1" "$img"
 	if [ -b "$rootdev" ]; then
 		[ "$(head -c 4 "$rootdev")" = hsqs ] ||
 			echo "c5-chainload: warning: $rootdev does not start with a squashfs superblock" >&2
@@ -125,6 +197,7 @@ cmd_stage() {
 	echo "image:    $img ($(wc -c < "$img") bytes)"
 	echo "cmdline:  $cmdline"
 	echo "safe_max: $sm   krp: $krp"
+	echo "commit:   $(commit_text)"
 	insmod "$DIR/chainload.ko" image="$img" cmdline="\"$cmdline\"" krp="$krp" safe_max="$sm" ||
 		{ dmesg | grep 'chainload:' | tail -n 20; die "insmod failed"; }
 	dmesg | grep 'chainload:' | tail -n 40
@@ -199,5 +272,5 @@ go-now) go_now ;;
 unstage) staged || die "not staged"; rmmod chainload ;;
 status) cmd_status ;;
 args) shift; cmd_args "$@" ;;
-*) sed -n '2,22p' "$0"; exit 2 ;;
+*) sed -n '2,33p' "$0"; exit 2 ;;
 esac

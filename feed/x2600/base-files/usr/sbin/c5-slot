@@ -33,7 +33,7 @@ set_flag() { # <slot> <label> [--reboot]
 }
 
 status() {
-	local own flag label='' rc=0
+	local own flag label='' rc=0 why
 	own=$(c5_own_slot) || own=
 	flag=$(c5_flag_slot)
 	echo "root:      $(c5_root_dev)"
@@ -47,6 +47,12 @@ status() {
 		if [ "$flag" = "$own" ]; then label=" (OpenWrt)"; else label=" (stock)"; fi
 	fi
 	echo "flag:      '$(c5_flag_read)' -> next boot slot $flag$label"
+	if [ -n "$own" ] && why=$(c5_stock_blocker); then
+		echo "stock:     NOT selectable: $why"
+	elif [ -n "$own" ]; then
+		echo "stock:     slot $(c5_other_slot) selectable"
+	fi
+	c5_nocommit && echo "commit:    no - chainloaded with a kernel that is not this slot's (c5.nocommit=1)"
 	if [ -f "$C5_OCDIR/pending-commit" ]; then
 		echo "pending:   sysupgrade not committed yet (the next healthy boot of its slot commits it):"
 		sed 's/^/  /' "$C5_OCDIR/pending-commit"
@@ -69,14 +75,18 @@ case "$1" in
 		;;
 	boot-stock)
 		other=$(c5_other_slot) || not_slot
-		c5_slot_bootable "$other" || {
-			echo "c5-slot: slot $other does not look bootable (kernel not a uImage or rootfs not squashfs); flag not changed" >&2
+		if why=$(c5_stock_blocker); then
+			echo "c5-slot: $why; flag not changed" >&2
 			exit 1
-		}
+		fi
 		set_flag "$other" stock "$2"
 		;;
 	boot-openwrt)
 		own=$(c5_own_slot) || not_slot
+		if c5_nocommit; then
+			echo "c5-slot: this boot runs a chainloaded kernel that is not slot $own's own kernel (c5.nocommit=1); flag not changed" >&2
+			exit 1
+		fi
 		[ -f "$C5_OCDIR/pending-commit" ] &&
 			echo "c5-slot: note: slot $own holds an uncommitted sysupgrade; the SPL will boot it directly (try-once still applies)"
 		set_flag "$own" OpenWrt "$2"

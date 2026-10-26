@@ -6,9 +6,10 @@
 # Rewrite the stock kernel and rootfs saved by the installer (default DIR
 # /data/opencreator-os/stock: kernel.img, rootfs.squashfs, SHA256SUMS or
 # MD5SUMS) into the slot this system is NOT running from (the stock slot).
-# While it writes, the boot flag points at this slot; --reboot then points
-# it at the stock slot and reboots. The last line printed is "restore:
-# OK..." or "restore: FAILED <why>".
+# While it writes, the boot flag points at this slot and stock is marked
+# invalid; --reboot then points the flag at the stock slot and reboots
+# (refused if stock is still not selectable). The last line printed is
+# "restore: OK..." or "restore: FAILED <why>".
 
 . /lib/c5/slot.sh
 . /lib/c5/restore.sh
@@ -47,6 +48,10 @@ fi
 c5_bootlog "restore-stock: slot $slot written and verified from $DIR"
 
 if [ "$REBOOT" = 1 ]; then
+	if why=$(c5_stock_blocker); then
+		echo "restore: OK, but not rebooting into stock: $why; boot flag stays on this slot"
+		exit 1
+	fi
 	c5_flag_write "$slot" || fail "written and verified, but the boot flag write failed"
 	echo "restore: OK; flag -> slot $slot, rebooting"
 	sync

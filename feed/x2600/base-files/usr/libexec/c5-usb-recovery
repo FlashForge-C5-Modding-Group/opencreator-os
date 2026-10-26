@@ -14,11 +14,19 @@
 #
 # Images are checked against SHA256SUMS (or MD5SUMS) next to them, written,
 # and read back. The slot OpenWrt runs from is never written. Progress goes
-# to opencreator-os-recovery/result.log on the stick. On success restore.conf
-# becomes restore.done, the boot flag points at stock and the printer
-# reboots. On failure restore.conf becomes restore.failed, the flag points
-# at this slot (or stays where it was if nothing was written) and OpenWrt
-# keeps booting. Either way a stick left plugged in does nothing next time.
+# to opencreator-os-recovery/result.log on the stick.
+#
+# On success restore.conf becomes restore.done. The flag is then pointed at
+# stock and the printer reboots - but only if stock is selectable: not
+# marked invalid (lib/c5/restore.sh), its slot starts with a uImage kernel
+# and a squashfs root, and, after restore-partition, its kernel and rootfs
+# equal kernel.img/rootfs.squashfs on the stick or in
+# /data/opencreator-os/stock when either has them. Otherwise OpenWrt keeps
+# booting with the flag on itself and STOCK-NEEDS-REPAIR.txt on the stick
+# says what is left, so the next repair can follow with another stick.
+# On failure restore.conf becomes restore.failed and OpenWrt keeps booting;
+# if anything of stock was written the flag stays on OpenWrt (stock marked
+# invalid). Either way a stick left plugged in does nothing next time.
 #
 # Test overrides: C5_REC_DEVS, C5_REC_MNT, C5_REC_WAIT, C5_REC_GRACE,
 # C5_USBSYS, plus those of /lib/c5/slot.sh.
@@ -99,12 +107,14 @@ finish() {
 
 # Perform the request in "$@"; on failure C5_WHY says why.
 act() {
-	local src
+	local src why
 	case "$1" in
 		boot-stock)
 			[ $# = 1 ] || { c5_why "usage: boot-stock"; return 1; }
-			c5_slot_bootable "$OTHER" ||
-				{ c5_why "stock slot $OTHER does not look bootable (kernel not a uImage or rootfs not squashfs)"; return 1; }
+			if why=$(c5_stock_blocker); then
+				c5_why "$why"
+				return 1
+			fi
 			;;
 		restore-stock)
 			[ $# = 1 ] || { c5_why "usage: restore-stock"; return 1; }
@@ -144,9 +154,38 @@ set -f
 set -- $req
 set +f
 if ! act "$@"; then
-	finish failed "FAILED: ${C5_WHY:-see above}; boot flag '$(c5_flag_read)'; OpenWrt keeps booting"
+	inv=$(c5_stock_invalid) && inv="; stock marked invalid ($inv), the flag stays on OpenWrt"
+	finish failed "FAILED: ${C5_WHY:-see above}; boot flag '$(c5_flag_read)'$inv; OpenWrt keeps booting"
 	exit 1
 fi
+
+# May the flag point at stock now?
+why=$(c5_stock_blocker) || why=
+if [ -z "$why" ] && [ "$1" = restore-partition ]; then
+	for src in "$R" "$C5_OCDIR/stock"; do
+		c5_stock_matches "$src"
+		case $? in
+			0) log "stock slot $OTHER equals $src/kernel.img + rootfs.squashfs"; break ;;
+			1) why="$C5_WHY"; break ;;
+			*) log "no verifiable kernel.img + rootfs.squashfs in $src" ;;
+		esac
+	done
+fi
+if [ -n "$why" ]; then
+	if ! c5_flag_write "$OWN"; then
+		finish failed "FAILED: $1 done, but stock still needs repair ($why) and pointing the boot flag at OpenWrt failed (flag '$(c5_flag_read)')"
+		exit 1
+	fi
+	{
+		echo "$(date '+%F %T') '$req' succeeded, but stock still needs repair:"
+		echo "  $why"
+		echo "OpenWrt (slot $OWN) stays the boot slot. Repair stock with another"
+		echo "recovery stick (e.g. restore-stock), then use boot-stock."
+	} > "$R/STOCK-NEEDS-REPAIR.txt"
+	finish 'done' "OK: $req; stock still needs repair: $why; boot flag stays on slot $OWN (OpenWrt), not rebooting"
+	exit 0
+fi
+rm -f "$R/STOCK-NEEDS-REPAIR.txt"
 if ! c5_flag_write "$OTHER"; then
 	finish failed "FAILED: $1 done, but pointing the boot flag at stock failed (flag '$(c5_flag_read)'); OpenWrt keeps booting"
 	exit 1

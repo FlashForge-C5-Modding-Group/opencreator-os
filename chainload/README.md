@@ -100,7 +100,7 @@ one directory, normally `/usr/data/opencreator-os/chainload/`. The installer
 puts them there.
 
 ```
-sh c5-chainload.sh args /dev/mmcblk0p2      # print cmdline, safe_max, krp; changes nothing
+sh c5-chainload.sh args /dev/mmcblk0p2      # print cmdline, safe_max, krp, commit decision; changes nothing
 sh c5-chainload.sh stage /dev/mmcblk0p2     # insmod + stage; harmless
 sh c5-chainload.sh status
 sh c5-chainload.sh unstage                  # or:
@@ -115,7 +115,16 @@ sh c5-chainload.sh go                       # no return; SSH drops
   with `hsqs`.
 - Builds the new command line from `/proc/cmdline`: it replaces `root=`,
   keeps `init=/linuxrc`, `rootfstype=squashfs`, `mem=`/`rmem=` and the
-  rest, and appends `rootwait` and `ieee754=relaxed` if they are missing.
+  rest (minus any `c5.*` words), and appends `rootwait` and
+  `ieee754=relaxed` if they are missing.
+- Decides whether a healthy test boot may commit the slot (make it the SPL's
+  boot slot; OpenWrt's `c5-booted` does that). This is allowed only when
+  `ROOTDEV` is the GPT `rootfs`/`rootfs2` partition (looked up with
+  `fdisk -l`) and `IMAGE` is a uImage whose size is exactly 64 + `ih_size`
+  and which is byte-identical (sha256, else md5) to the start of the paired
+  `kernel`/`kernel2` partition. In every other case `c5.nocommit=1` is
+  appended, and the test boot leaves the flag alone. `stage` prints the
+  decision as `commit:`.
 - Reads `krp` from `/proc/kallsyms`. If the addresses read as zero, it lifts
   `kptr_restrict` briefly.
 - Computes `safe_max` from `/proc/iomem`: the end of the first `System RAM`
@@ -143,7 +152,8 @@ from slot 2 (`/dev/mmcblk0p4`), so OpenWrt goes to slot 1 (`/dev/mmcblk0p2`).
 
 Paths can be overridden for testing: `C5CL_CMDLINE`, `C5CL_IOMEM` and
 `C5CL_KALLSYMS` replace `/proc/cmdline`, `/proc/iomem` and `/proc/kallsyms`
-for `args`.
+for `args`; `C5CL_DISK`, `C5CL_FDISK` and `C5CL_DEVROOT` (a prefix for
+reading partition devices) affect the commit decision.
 
 ## Memory (Creator 5 Pro, Observed 2026-10-26)
 

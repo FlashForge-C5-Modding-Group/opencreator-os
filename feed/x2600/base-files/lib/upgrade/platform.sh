@@ -20,8 +20,16 @@
 # --chainload install stick), or with switch-to-openwrt.sh (SPL boot,
 # try-once still applies). To make that possible the new kernel is copied to
 # userdata as opencreator-os/chainload/kernel.uimage (the image
-# c5-chainload.sh stages by default) and opencreator-os/pending-commit
-# records what was written; c5-booted removes it when it commits.
+# c5-chainload.sh stages by default; it allows the commit only when that
+# image equals the slot's kernel) and opencreator-os/pending-commit records
+# what was written; c5-booted removes it when it commits. Both are deleted
+# before the slot is written; if they cannot be written again afterwards the
+# upgrade fails (the slot is then only usable through a reinstall from
+# stock), so a stale saved kernel is never staged against a new rootfs.
+#
+# Refused while stock is not selectable (c5_stock_blocker: marked invalid by
+# an unfinished restore, or no uImage/squashfs in its slot): the upgrade
+# makes the next boot stock.
 #
 # Config: platform_copy_config stores $UPGRADE_BACKUP on userdata as
 # opencreator-os/sysupgrade.tgz; preinit 79_c5_move_config moves it to
@@ -62,7 +70,7 @@ c5_with_userdata() {
 }
 
 platform_check_image() {
-	local tar="$1" own dir ksz rsz kmax rmax
+	local tar="$1" own dir ksz rsz kmax rmax why
 	own=$(c5_own_slot) || { v "root $(c5_root_dev) is not an eMMC slot; refusing"; return 1; }
 	dir=$(c5_su_dir "$tar") || { v "not a sysupgrade tar"; return 1; }
 	[ "$(c5_su_member "$tar" "$dir" kernel | head -c 4 | hexdump -ve '1/1 "%02x"')" = 27051956 ] ||
@@ -75,6 +83,10 @@ platform_check_image() {
 	rmax=$(c5_part_bytes "$(c5_slot_rname "$own")") || { v "cannot size the rootfs partition"; return 1; }
 	[ "$ksz" -le "$kmax" ] || { v "kernel too large ($ksz > $kmax)"; return 1; }
 	[ "$rsz" -le "$rmax" ] || { v "rootfs too large ($rsz > $rmax)"; return 1; }
+	if why=$(c5_stock_blocker); then
+		v "refusing: sysupgrade reboots into stock, but $why; repair stock first (c5-restore-stock)"
+		return 1
+	fi
 	return 0
 }
 
@@ -99,31 +111,48 @@ c5_su_version() { # <tar>
 	echo "${ver:-unknown}"
 }
 
-# Runs with userdata mounted at /tmp/c5data (c5_with_userdata). Uses the
-# C5_SU_* variables set by platform_do_upgrade.
+# Runs with userdata mounted at /tmp/c5data (c5_with_userdata): forget the
+# saved chainload kernel and pending-commit of any earlier upgrade.
+c5_drop_pending() {
+	local d=/tmp/c5data/opencreator-os
+	rm -f "$d/pending-commit" "$d/pending-commit.new" "$d/chainload/kernel.uimage" "$d/chainload/kernel.uimage.new"
+	[ ! -e "$d/pending-commit" ] && [ ! -e "$d/chainload/kernel.uimage" ]
+}
+
+# Runs with userdata mounted at /tmp/c5data. Uses the C5_SU_* variables set
+# by platform_do_upgrade. On any failure nothing usable is left behind.
 c5_store_pending() {
 	local d=/tmp/c5data/opencreator-os
-	mkdir -p "$d/chainload" || return 1
-	# sysupgrade -n: drop a stale saved config so it is not restored later.
-	[ -n "$UPGRADE_BACKUP" ] || rm -f "$d/sysupgrade.tgz"
-	c5_su_member "$C5_SU_TAR" "$C5_SU_DIR" kernel > "$d/chainload/kernel.uimage.new" || return 1
-	[ "$(sha256sum < "$d/chainload/kernel.uimage.new" | cut -d' ' -f1)" = "$C5_SU_KSUM" ] || return 1
-	mv -f "$d/chainload/kernel.uimage.new" "$d/chainload/kernel.uimage" || return 1
-	{
-		echo "slot=$C5_SU_SLOT"
-		echo "rootdev=$C5_SU_RDEV"
-		echo "version=$C5_SU_VERSION"
-		echo "previous=$C5_SU_PREVIOUS"
-		echo "date=$(date '+%F %T')"
-		echo "kernel_sha256=$C5_SU_KSUM"
-		echo "rootfs_sha256=$C5_SU_RSUM"
-	} > "$d/pending-commit.new" && mv -f "$d/pending-commit.new" "$d/pending-commit"
+	if mkdir -p "$d/chainload" &&
+		c5_su_member "$C5_SU_TAR" "$C5_SU_DIR" kernel > "$d/chainload/kernel.uimage.new" &&
+		[ "$(sha256sum < "$d/chainload/kernel.uimage.new" | cut -d' ' -f1)" = "$C5_SU_KSUM" ] &&
+		mv -f "$d/chainload/kernel.uimage.new" "$d/chainload/kernel.uimage" &&
+		{
+			echo "slot=$C5_SU_SLOT"
+			echo "rootdev=$C5_SU_RDEV"
+			echo "version=$C5_SU_VERSION"
+			echo "previous=$C5_SU_PREVIOUS"
+			echo "date=$(date '+%F %T')"
+			echo "kernel_sha256=$C5_SU_KSUM"
+			echo "rootfs_sha256=$C5_SU_RSUM"
+		} > "$d/pending-commit.new" &&
+		mv -f "$d/pending-commit.new" "$d/pending-commit"; then
+		# sysupgrade -n: drop a stale saved config so it is not restored later.
+		[ -n "$UPGRADE_BACKUP" ] || rm -f "$d/sysupgrade.tgz"
+		return 0
+	fi
+	c5_drop_pending
+	return 1
 }
 
 platform_do_upgrade() {
-	local tar="$1" own other dir kdev rdev rmax ksum rsum ksz rsz
+	local tar="$1" own other dir kdev rdev rmax ksum rsum ksz rsz why
 	own=$(c5_own_slot) || { v "root $(c5_root_dev) is not an eMMC slot; not writing"; return 1; }
 	other=$(c5_other_slot)
+	if why=$(c5_stock_blocker); then
+		v "not writing: the next boot would be stock, but $why"
+		return 1
+	fi
 	dir=$(c5_su_dir "$tar") || { v "not a sysupgrade tar"; return 1; }
 	kdev=$(c5_part_dev "$(c5_slot_kname "$own")") || { v "kernel partition not found"; return 1; }
 	rdev=$(c5_part_dev "$(c5_slot_rname "$own")") || { v "rootfs partition not found"; return 1; }
@@ -132,6 +161,9 @@ platform_do_upgrade() {
 	rsum=$(c5_su_member "$tar" "$dir" root | sha256sum | cut -d' ' -f1)
 	ksz=$(c5_su_member "$tar" "$dir" kernel | wc -c)
 	rsz=$(c5_su_member "$tar" "$dir" root | wc -c)
+
+	c5_with_userdata c5_drop_pending ||
+		{ v "cannot remove the saved chainload kernel / pending-commit on userdata; not writing"; return 1; }
 
 	v "Pointing the boot flag at stock (slot $other); it stays there after the write"
 	c5_flag_write "$other" || { v "boot flag write failed; not writing"; return 1; }
@@ -158,7 +190,11 @@ platform_do_upgrade() {
 	if c5_with_userdata c5_store_pending; then
 		v "Recorded opencreator-os/pending-commit and chainload/kernel.uimage on userdata"
 	else
-		v "warning: could not record pending-commit / chainload/kernel.uimage on userdata"
+		v "ERROR: slot $own is written, but chainload/kernel.uimage and pending-commit could not be stored on userdata."
+		v "The next boot is stock (slot $other). The new image cannot be test-booted with the saved kernel;"
+		v "reinstall it from stock with an install stick (tools/make-install-stick.sh --chainload)."
+		c5_bootlog "sysupgrade: slot $own written, but storing the chainload kernel / pending-commit FAILED"
+		return 1
 	fi
 
 	v "Slot $own written and verified (version $C5_SU_VERSION). NEXT BOOT IS STOCK (slot $other)."

@@ -1,5 +1,5 @@
 # shellcheck shell=sh
-# shellcheck disable=SC3043  # busybox ash supports 'local'
+# shellcheck disable=SC3043,SC1091  # busybox ash supports 'local'; slot.sh is on the target
 #
 # Runs in the preinit_mount_root hook: the overlay is mounted and / is
 # writable. Imports from userdata (stock /usr/data):

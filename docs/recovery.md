@@ -32,34 +32,59 @@ test boot hangs, a power cycle brings stock back.
 
 **Try-once on every OpenWrt boot.**
 1. Early in boot (preinit, before any filesystem is mounted read-write)
-   `05_c5_tryboot` points the boot flag at the stock slot.
-2. At the end of boot (`/etc/init.d/c5-booted`, START=99) the system checks
-   that `/data` is mounted, `dropbear` runs, and the test marker
-   `/data/opencreator-os/tryboot-fail-test` is absent. Only then does it
-   point the flag back at the OpenWrt slot.
-3. So an OpenWrt boot that hangs or comes up broken after preinit leaves the
-   flag on stock: the next power cycle boots stock.
+   `05_c5_tryboot` points the boot flag at the stock slot. It does not do
+   this when stock is not selectable (see "stock-invalid mark" below, or the
+   stock slot does not start with a uImage kernel and a squashfs root). Then
+   the flag stays on the OpenWrt slot. Falling back to a broken stock could
+   not be undone, while this OpenWrt already got as far as preinit.
+2. At the end of boot `/etc/init.d/c5-booted` (START=99) checks, in the
+   background, that:
+   - `/data` is mounted;
+   - the test marker `/data/opencreator-os/tryboot-fail-test` is absent;
+   - Wi-Fi credentials were imported (`/etc/c5/wifi.conf` or
+     `wireless.c5sta.ssid`). Without them the printer cannot be reached, so
+     it is never committed;
+   - within 120 s, an interface other than `lo` has a global IPv4 address,
+     `dropbear` runs, and a socket listens on TCP port 22.
+
+   Only then does it point the flag back at the OpenWrt slot.
+3. So an OpenWrt boot that hangs, comes up broken after preinit, or cannot
+   be reached over the network leaves the flag on stock. The next power
+   cycle boots stock.
 
 A chainload test boot from an eMMC slot runs the same two steps, so a healthy
-test boot already makes OpenWrt the default. A test boot with the root on a
-USB stick never touches the flag.
+test boot already makes OpenWrt the default, but only when the chainloaded
+kernel is that slot's own kernel. `c5-chainload.sh stage /dev/mmcblk0pN`
+compares the staged image with the GPT `kernel`/`kernel2` partition paired
+with the rootfs `pN` (`p2`→`p1`, `p4`→`p3`). The image must be exactly one
+uImage (64-byte header + `ih_size`) and byte-identical to the start of that
+partition. If it is not, or the root is anything else (a USB stick, an
+unknown partition), the script adds `c5.nocommit=1` to the command line.
+`stage` and `args` print the decision. On such a boot `c5-booted` and
+`c5-slot boot-openwrt` leave the flag alone. So a good kernel tested against
+a slot whose own kernel is bad never makes that slot the default.
 
 **Sysupgrade is test-then-commit.** `sysupgrade` on OpenWrt points the flag at
 stock, writes the new image into the OpenWrt slot, reads it back, and leaves
-the flag on stock even when everything verified. It also copies the new
-kernel to `/data/opencreator-os/chainload/kernel.uimage` and writes
-`/data/opencreator-os/pending-commit` (slot, version, date, checksums).
-`c5-slot status` shows that marker. The printer then reboots into **stock**;
-the new image becomes the default only after it booted once and `c5-booted`
-found it healthy. That boot also deletes `pending-commit`. Test it from stock
-with one of:
+the flag on stock even when everything verified. Before writing it deletes
+the saved chainload kernel and `pending-commit` on userdata. Afterwards it
+copies the new kernel to `/data/opencreator-os/chainload/kernel.uimage` and
+writes `/data/opencreator-os/pending-commit` (slot, version, date,
+checksums). If that fails, sysupgrade fails. The slot then holds the new
+image, but no saved kernel exists to stage against it, so reinstall it from
+stock with an install stick. `c5-slot status` shows the marker. The printer
+then reboots into **stock**. The new image becomes the default only after it
+booted once with its own kernel and `c5-booted` found it healthy. That boot
+also deletes `pending-commit`. sysupgrade refuses to run while stock is not
+selectable (`c5-slot status`, line `stock:`), because it would reboot into
+stock. Test it from stock with one of:
 
 - SSH to stock:
   `sh /usr/data/opencreator-os/chainload/c5-chainload.sh stage /dev/mmcblk0pN`
   then `sh /usr/data/opencreator-os/chainload/c5-chainload.sh go`, where
   `/dev/mmcblk0pN` is the OpenWrt rootfs (sysupgrade prints it; `p2` for slot
   1, `p4` for slot 2). The script stages the new kernel because sysupgrade
-  copied it there.
+  copied it there, and `stage` should report `commit: yes`.
 - An install stick made with `tools/make-install-stick.sh --chainload` from
   the same build. The installer sees that the slot already holds that image,
   skips the write, and test-boots it. A stick from a different build
@@ -68,11 +93,26 @@ with one of:
   protects everything after preinit, but not a kernel that dies earlier).
   Prefer chainload.
 
-**Writes of stock partitions point the flag at OpenWrt first.**
-`c5-restore-stock` and the OpenWrt-side USB recovery hook point the flag at
-the running OpenWrt slot before they write anything of stock. If power fails
-or a write does not verify, the next boot is OpenWrt, which is known to run.
-The flag goes to stock only after the written bytes read back correctly.
+**Writes of stock partitions: flag on OpenWrt, stock marked invalid.**
+`c5-restore-stock` and the OpenWrt-side USB recovery hook first point the
+flag at the running OpenWrt slot. They then write a **stock-invalid mark**
+into one sector of `ota` (offset 128 KiB, with fsync and read back), check
+the flag once more, and only then write stock. The mark names the part being
+written (`slot` for stock's kernel + rootfs, `usershare`). A part is removed
+from the mark only after all its writes read back correctly. While any part
+is listed:
+- `05_c5_tryboot` keeps the flag on OpenWrt on every boot;
+- `c5-slot boot-stock`, the recovery stick's `boot-stock`,
+  `c5-restore-stock --reboot` and sysupgrade refuse to select stock.
+
+So a power loss or failed write during a stock restore, even repeated ones,
+keeps booting OpenWrt until a restore of that part succeeds. The mark is a
+raw sector, so preinit reads it before any filesystem is mounted, and it
+does not depend on `userdata`. `c5-slot status` shows it. Observed: stock's
+only `ota` writer in its scripts is `mmc_write_str` in `ota_utils.sh`, which
+does `echo STR > /dev/mmcblk0p5` (a few bytes at offset 0). Hypothesis, not
+checked: `firmwareExe` (a binary) never writes `ota` past the flag either.
+If stock did overwrite the mark, its slot magic check still applies.
 
 **The running slot is never written.** sysupgrade writes only the slot it
 runs from: that slot's content is in RAM, and the flag points at stock while
@@ -145,17 +185,25 @@ non-comment line of that file (Windows line endings are fine):
 
 | `restore.conf` | Action |
 |----------------|--------|
-| `boot-stock` | Checks that the stock slot starts with a uImage kernel and a squashfs root, then points the flag at stock. |
+| `boot-stock` | Checks that stock is selectable (not marked invalid, and the slot starts with a uImage kernel and a squashfs root), then points the flag at stock. |
 | `restore-stock` | Writes `kernel.img` and `rootfs.squashfs` from `opencreator-os-recovery/` into the stock slot. If the stick has neither file, it uses `/data/opencreator-os/stock/`. |
 | `restore-partition usershare` | Writes `usershare.img` (ext4) into `usershare`. OpenWrt does not mount `usershare`. |
 
 Images must be listed in `SHA256SUMS` (or `MD5SUMS`) in the same directory.
 They are checked before the write and read back after it. When the action
-succeeds, the hook points the flag at stock, renames `restore.conf` to
-`restore.done`, and reboots into stock. When it fails, the hook renames
+succeeds, the hook renames `restore.conf` to `restore.done`. It then points
+the flag at stock and reboots, but only if stock is selectable. For
+`restore-partition` it also requires that stock's kernel and rootfs equal
+`kernel.img`/`rootfs.squashfs` on the stick or, if the stick has none, in
+`/data/opencreator-os/stock/`, whenever one of them has a verifiable copy.
+Otherwise OpenWrt keeps booting with the flag on itself, and
+`opencreator-os-recovery/STOCK-NEEDS-REPAIR.txt` on the stick says what is
+left (OpenWrt has no display in this release). Repair that with the next
+stick, e.g. `restore-stock`. When the action fails, the hook renames
 `restore.conf` to `restore.failed`, logs why, and OpenWrt keeps booting. The
-flag then points at OpenWrt if anything was written, and stays where it was
-otherwise. Either way, a stick left plugged in does nothing on the next boot.
+flag then points at OpenWrt if anything was written (stock stays marked
+invalid), and stays where it was otherwise. Either way, a stick left plugged
+in does nothing on the next boot.
 The log is `opencreator-os-recovery/result.log` on the stick, copied to
 `/data/opencreator-os/logs/recovery-last.log`.
 
@@ -192,7 +240,8 @@ the installer again; it writes the OpenWrt slot again.
 
 ### 2. OpenWrt boots from the SPL but is not healthy
 
-`c5-booted` left the flag on stock (boot log: `booted: NOT healthy (...)`).
+`c5-booted` left the flag on stock (boot log: `booted: NOT healthy (...)`,
+e.g. no Wi-Fi credentials, or no IPv4 address / SSH listener within 120 s).
 Power-cycle or `reboot`: stock boots. To try OpenWrt again from stock, run
 `sh switch-to-openwrt.sh` (install stick or a copy on `/usr/data`) or chainload
 again. If OpenWrt hung after preinit, the result is the same: the next power
@@ -221,9 +270,12 @@ cycle boots stock.
 
 ### 5. Stock slot damaged, OpenWrt works
 
-Symptoms: `c5-slot boot-stock` refuses, or `c5-restore-stock --dry-run`
-reports a checksum problem with the saved copy. If the flag already points at
-a stock slot that does not boot, see case 7. Restore it from OpenWrt:
+Symptoms: `c5-slot boot-stock` refuses, `c5-slot status` shows
+`stock: NOT selectable`, or `c5-restore-stock --dry-run` reports a checksum
+problem with the saved copy. A restore that was interrupted or failed leaves
+stock marked invalid. OpenWrt then stays the boot slot on every boot until a
+restore of the listed part succeeds. If the flag already points at a stock
+slot that does not boot, see case 7. Restore it from OpenWrt:
 
 - `c5-restore-stock --dry-run`, then `c5-restore-stock --reboot`. This uses
   `/data/opencreator-os/stock/`.
@@ -247,13 +299,16 @@ cannot be reached, so this is case 8.
 The SPL keeps booting the same broken slot.
 
 - Broken OpenWrt slot: this needs a kernel or rootfs that dies before preinit
-  on an SPL boot after it passed a chainload test and a healthy `c5-booted`.
-  Or the tryboot flag write failed (boot log: `tryboot: FLAG WRITE FAILED`)
-  and the boot hung later. Chainload-first and test-then-commit exist to
-  make this unlikely.
+  on an SPL boot after its own kernel passed a chainload test and a healthy
+  `c5-booted`. A warm chainload is not a cold-boot proof. Or the tryboot flag
+  write failed (boot log: `tryboot: FLAG WRITE FAILED`) and the boot hung
+  later. Chainload-first, the kernel identity check and test-then-commit
+  exist to make this unlikely.
 - Broken stock slot as flag target: avoided because every write of stock
-  points the flag at OpenWrt first and `boot-stock` checks the slot. A stock
-  OTA update or outside tampering can still cause it.
+  points the flag at OpenWrt first and keeps stock marked invalid until it
+  verified, and because every automatic or manual switch to stock checks the
+  mark and the slot's magics. Damage that keeps the magics intact, a stock
+  OTA update, or outside tampering can still cause it.
 
 In both cases no software path is left: go to case 8.
 

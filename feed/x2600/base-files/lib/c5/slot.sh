@@ -26,6 +26,13 @@ C5_REBOOT_MARK=${C5_REBOOT_MARK:-/tmp/c5-recovery.reboot}
 C5_BOOTLOG_SECTOR=128      # bootlog lives at 64 KiB inside the ota partition ...
 C5_BOOTLOG_SECTORS=128     # ... and is 64 KiB long
 C5_BOOTLOG_MAGIC=C5BOOTLOG1
+# One sector at 128 KiB inside ota: "<magic> <reason>" while stock's slot or
+# usershare may be half written (lib/c5/restore.sh sets it before the first
+# write and clears it after the last verified one). While it is set the flag
+# must not point at stock. A raw sector, so preinit can read it before any
+# filesystem is mounted, and it does not depend on userdata being healthy.
+C5_STOCKINV_SECTOR=256
+C5_STOCKINV_MAGIC=C5STOCKINVALID1
 
 # $1 = GPT partition name -> /dev/mmcblk0pN (return 1 if unknown)
 c5_part_dev() {
@@ -184,4 +191,61 @@ c5_slot_bootable() {
 	k=$(c5_part_dev "$(c5_slot_kname "$1")") || return 1
 	r=$(c5_part_dev "$(c5_slot_rname "$1")") || return 1
 	[ "$(c5_magic_hex "$k")" = 27051956 ] && [ "$(head -c 4 "$r" 2>/dev/null)" = hsqs ]
+}
+
+# ota device if it is large enough to hold the stock-invalid sector.
+c5_stockinv_dev() {
+	local dev bytes
+	dev=$(c5_part_dev ota) || return 1
+	bytes=$(c5_part_bytes ota) || return 1
+	[ "$bytes" -ge $(((C5_STOCKINV_SECTOR + 1) * 512)) ] || return 1
+	echo "$dev"
+}
+
+# Stock marked invalid? Prints the recorded reason and returns 0 if so.
+c5_stock_invalid() {
+	local dev s
+	dev=$(c5_stockinv_dev) || return 1
+	s=$(dd if="$dev" bs=512 skip="$C5_STOCKINV_SECTOR" count=1 2>/dev/null | tr -d '\000')
+	case "$s" in
+		"$C5_STOCKINV_MAGIC "*) echo "${s#"$C5_STOCKINV_MAGIC "}"; return 0 ;;
+	esac
+	return 1
+}
+
+# $* = reason; written with fsync and read back.
+c5_stock_invalid_set() {
+	local dev
+	dev=$(c5_stockinv_dev) || return 1
+	printf '%s %s' "$C5_STOCKINV_MAGIC" "$*" | head -c 500 |
+		dd of="$dev" bs=512 seek="$C5_STOCKINV_SECTOR" count=1 conv=sync,notrunc,fsync 2>/dev/null || return 1
+	c5_drop_caches
+	c5_stock_invalid > /dev/null
+}
+
+c5_stock_invalid_clear() {
+	local dev
+	dev=$(c5_stockinv_dev) || return 1
+	dd if=/dev/zero of="$dev" bs=512 seek="$C5_STOCKINV_SECTOR" count=1 conv=notrunc,fsync 2>/dev/null || return 1
+	c5_drop_caches
+	! c5_stock_invalid > /dev/null
+}
+
+# Chainload test with a kernel that is not the root slot's own kernel
+# (c5-chainload.sh adds c5.nocommit=1): never point the flag at this slot.
+c5_nocommit() {
+	tr -s ' \t' '\n' < "$C5_CMDLINE_FILE" 2>/dev/null | grep -qx 'c5\.nocommit=1'
+}
+
+# Is there a reason the flag must not point at stock (the other slot)?
+# Prints it and returns 0 if so; returns 1 when stock may be selected.
+c5_stock_blocker() {
+	local s why
+	s=$(c5_other_slot) || { echo "root $(c5_root_dev) is not an eMMC slot"; return 0; }
+	if why=$(c5_stock_invalid); then
+		echo "stock marked invalid (may be half written: $why)"
+		return 0
+	fi
+	c5_slot_bootable "$s" || { echo "stock slot $s has no uImage kernel / squashfs root"; return 0; }
+	return 1
 }
