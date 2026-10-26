@@ -1,0 +1,23 @@
+From: opencreator-os
+Subject: [PATCH] uapi: binder: do not test a kernel config symbol
+
+The vendor tree carries an old Android binder header that tests
+CONFIG_ANDROID_BINDER_IPC_64BIT in a uapi file, which makes
+`make headers_install` (OpenWrt's toolchain/kernel-headers) fail with
+"leak CONFIG_ANDROID_BINDER_IPC_64BIT to user-space". Mainline dropped the
+32-bit binder protocol; drop the test so the header always describes the
+64-bit layout, as in mainline.
+
+--- a/include/uapi/linux/android/binder.h
++++ b/include/uapi/linux/android/binder.h
+@@ -24,10 +24,6 @@
+ #include <linux/types.h>
+ #include <linux/ioctl.h>
+ 
+-#ifndef CONFIG_ANDROID_BINDER_IPC_64BIT
+-#define BINDER_IPC_32BIT 1
+-#endif
+-
+ #define B_PACK_CHARS(c1, c2, c3, c4) \
+ 	((((c1)<<24)) | (((c2)<<16)) | (((c3)<<8)) | (c4))
+ #define B_TYPE_LARGE 0x85

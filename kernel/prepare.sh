@@ -43,10 +43,12 @@ log "kernel $ver at $KSRC"
 install -m0644 "$HERE/dts/creator5pro.dts" "$KSRC/module_drivers/dts/x2600/creator5pro.dts"
 for p in "$HERE"/patches/*.patch; do
 	[ -e "$p" ] || continue
-	if patch -d "$KSRC" -p1 -R --dry-run -s -f < "$p" >/dev/null 2>&1; then
+	# --fuzz=0 both ways: with fuzz, a reverse dry run of an unapplied patch
+	# can succeed and the patch would be skipped as "already applied".
+	if patch -d "$KSRC" -p1 -R --dry-run -s -f --fuzz=0 < "$p" >/dev/null 2>&1; then
 		log "already applied: $(basename "$p")"
 	else
-		patch -d "$KSRC" -p1 -s -f < "$p" || die "patch failed: $(basename "$p")"
+		patch -d "$KSRC" -p1 -N -s --fuzz=0 < "$p" || die "patch failed: $(basename "$p")"
 		log "applied: $(basename "$p")"
 	fi
 done
