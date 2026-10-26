@@ -19,6 +19,11 @@ OW=$WORK/openwrt
 log() { printf '\n=== %s\n' "$*"; }
 die() { echo "build: $*" >&2; exit 1; }
 
+# WSL appends Windows directories (/mnt/c/..., with spaces) to PATH; OpenWrt's
+# image step runs find -execdir, which refuses relative or odd PATH entries.
+PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v -e '^/mnt/' -e '^$' -e '^[^/]' | paste -sd:)
+export PATH
+
 MENU= KMENU= KCLEAN=
 for a in "$@"; do
 	case $a in

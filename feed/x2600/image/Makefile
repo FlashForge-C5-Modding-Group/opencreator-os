@@ -4,13 +4,16 @@ include $(INCLUDE_DIR)/image.mk
 # Slot sizes from the Creator 5 Pro GPT: kernel/kernel2 8 MiB,
 # rootfs/rootfs2 100 MiB. The SPL loads a legacy uImage to load-64 and jumps
 # to the entry point; the zImage self-extracts from 0x80f00000.
+# KERNEL_SIZE is the chainload limit, not the slot size: chainload.ko refuses
+# images larger than SAFE_MIN - LOAD_PHYS (0x01600000 - 0x00f00000 = 7 MiB,
+# chainload/chainload_main.c), and every install is chainload-tested first.
 define Device/Default
   PROFILES := Default
   KERNEL_NAME := zImage
   KERNEL_LOADADDR := 0x80f00000
   KERNEL_ENTRY := 0x80f00000
   KERNEL := kernel-bin | uImage none | check-size $$$$(KERNEL_SIZE)
-  KERNEL_SIZE := 8192k
+  KERNEL_SIZE := 7168k
   IMAGE_SIZE := 102400k
   IMAGES := kernel.uimage root.squashfs sysupgrade.tar
   IMAGE/kernel.uimage := append-kernel
