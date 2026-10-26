@@ -4,6 +4,9 @@ include $(TOPDIR)/rules.mk
 
 ARCH:=mipsel
 BOARD:=x2600
+# image.mk names device symbols CONFIG_TARGET_<board>_<subtarget>_DEVICE_*,
+# so a target without a subtarget never builds a device image.
+SUBTARGETS:=generic
 BOARDNAME:=Ingenic X2600 (XBurst2)
 CPU_TYPE:=mips32
 FEATURES:=squashfs usb fpu

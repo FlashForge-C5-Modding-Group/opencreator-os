@@ -90,7 +90,7 @@ log "config ($VERSION)"
 	echo "CONFIG_VERSION_NUMBER=\"$VERSION\""
 } > "$OW/.config"
 (cd "$OW" && make defconfig >/dev/null)
-grep -q '^CONFIG_TARGET_x2600_DEVICE_flashforge_creator5pro=y' "$OW/.config" || die "target not selected"
+grep -q '^CONFIG_TARGET_x2600_generic_DEVICE_flashforge_creator5pro=y' "$OW/.config" || die "target not selected"
 
 [ -n "$MENU" ] && (cd "$OW" && make menuconfig)
 [ -n "$KMENU" ] && (cd "$OW" && make kernel_menuconfig)
