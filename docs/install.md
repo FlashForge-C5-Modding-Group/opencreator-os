@@ -59,9 +59,9 @@ it, so do not use it for a new kernel.
 Every boot of OpenWrt points the flag back at stock early in preinit and at
 itself again once healthy. A boot that dies after preinit returns to stock
 on the next power cycle. A kernel that dies before preinit cannot be caught
-this way; see "What cannot be recovered without the cloner" in `recovery.md`.
-on the next power cycle. A kernel that dies before preinit cannot be caught
 this way; see failure case 7 in `recovery.md`.
+
+`sysupgrade` writes the other slot, keeps the flag on stock and records the
 new image; it becomes the default only after it has booted healthy once.
 
 ## 4. Going back to stock
