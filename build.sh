@@ -107,6 +107,6 @@ BIN=$OW/bin/targets/x2600/generic
 DEST=$OUT/$VERSION
 log "artifacts -> $DEST"
 mkdir -p "$DEST"
-cp "$BIN"/openwrt-*flashforge_creator5pro-* "$BIN"/sha256sums "$DEST/"
+cp "$BIN"/opencreator-os-x2600-generic-flashforge_creator5pro-* "$BIN"/sha256sums "$DEST/"
 cp "$OW/build_dir/target-"*/linux-x2600_generic/linux-*/.config "$DEST/kernel.config" 2>/dev/null || true
 ls -l "$DEST"

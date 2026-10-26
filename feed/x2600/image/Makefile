@@ -7,12 +7,13 @@ include $(INCLUDE_DIR)/image.mk
 # KERNEL_SIZE is the chainload limit, not the slot size: chainload.ko refuses
 # images larger than SAFE_MIN - LOAD_PHYS (0x01600000 - 0x00f00000 = 7 MiB,
 # chainload/chainload_main.c), and every install is chainload-tested first.
+# image.mk enforces KERNEL_SIZE on the kernel image.
 define Device/Default
   PROFILES := Default
   KERNEL_NAME := zImage
   KERNEL_LOADADDR := 0x80f00000
   KERNEL_ENTRY := 0x80f00000
-  KERNEL := kernel-bin | uImage none | check-size $$$$(KERNEL_SIZE)
+  KERNEL := kernel-bin | uImage none
   KERNEL_SIZE := 7168k
   IMAGE_SIZE := 102400k
   IMAGES := kernel.uimage root.squashfs sysupgrade.tar

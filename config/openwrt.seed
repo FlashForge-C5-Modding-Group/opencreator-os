@@ -3,6 +3,9 @@ CONFIG_TARGET_x2600_generic=y
 CONFIG_TARGET_x2600_generic_DEVICE_flashforge_creator5pro=y
 CONFIG_TARGET_ROOTFS_SQUASHFS=y
 # CONFIG_TARGET_ROOTFS_INITRAMFS is not set
+# Stable image names (no version in the file name); the version is the
+# artifact directory name.
+# CONFIG_VERSION_FILENAMES is not set
 # CONFIG_TARGET_ROOTFS_EXT4FS is not set
 # CONFIG_TARGET_ROOTFS_TARGZ is not set
 CONFIG_DEVEL=y
