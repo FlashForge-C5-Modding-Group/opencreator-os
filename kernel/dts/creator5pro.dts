@@ -1,0 +1,184 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * FlashForge Creator 5 Pro mainboard (Ingenic X2600) for the Ingenic X2600
+ * SDK Linux 6.6 kernel, built in through DT_X2600_MODULE_BASE /
+ * DT_X2600_MODULE_BASE_DTS_FILE="x2600/creator5pro.dts".
+ *
+ * Written from the device tree the stock 5.10 kernel runs on (identical in
+ * kernel packages 2.0.7 and 2.0.8) and the stock module parameters. Every
+ * difference from the stock tree is marked DEVIATION.
+ *
+ * Boot contract with the stock SPL (no DTB passed, fixed command line):
+ *   console=ttyS0,115200n8 loglevel=8 mem=236M@0x0 rmem=16M@0xec00000
+ *   rtos_size=4M@0xfc00000 mem=256M@0x30000000 init=/linuxrc
+ *   root=/dev/mmcblk0pN rootwait rootfstype=squashfs ro lpj=...
+ * so: no /chosen bootargs (the SPL's argv is the command line, plus the
+ * kernel's built-in CONFIG_CMDLINE extension), no /memory node (mem=
+ * describes RAM and already leaves out the rmem/RTOS area at 0x0ec00000-
+ * 0x0fffffff), uart0 = ttyS0, msc0 = mmc0.
+ */
+/dts-v1/;
+
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/gpio/gpio.h>
+#include "x2600.dtsi"
+
+/ {
+	compatible = "flashforge,creator5pro", "ingenic,x2600";
+	model = "FlashForge Creator 5 Pro";
+
+	/*
+	 * Serial aliases come from x2600.dtsi (uart0..7), as in stock, so the
+	 * port numbers match stock: ttyS0 console, ttyS2 mainBoardGD,
+	 * ttyS3 VDS dryer, ttyS4 heaterBoard, ttyS5 eBoard, ttyS7 levelBoard.
+	 */
+
+	/*
+	 * DEVIATION: stock powers the RTL8821CU from its vendor driver
+	 * (8821cu.ko power_on=PB07). The in-tree rtw88 driver has no such
+	 * parameter, so PB07 is held on here. Active-high is ASSUMED.
+	 */
+	wifi_pwr: regulator-wifi {
+		compatible = "regulator-fixed";
+		regulator-name = "wifi-pwr";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		gpio = <&gpb 7 GPIO_ACTIVE_HIGH INGENIC_GPIO_NOBIAS>;
+		enable-active-high;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
+	/*
+	 * Left to userspace, as in stock: PC11 heartbeat (toggled at 1 Hz by
+	 * c5-heartbeat), PB17/PB18 (MCU reset/boot pins for flashing),
+	 * PC14 backlight and the KX070 panel and GT9xx touch (later milestone).
+	 */
+};
+
+&pinctrl {
+	/* As stock: GPIO port A and the port E / MSC0 domain run at 1.8 V. */
+	ingenic,gpa_voltage = <GPIO_VOLTAGE_1V8>;
+	ingenic,gpe_msc_voltage = <GPIO_VOLTAGE_1V8>;
+};
+
+/* ---- UARTs: stock's enabled set and pin groups ---- */
+
+&uart0 {	/* ttyS0 console */
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart0_pe>;
+};
+
+&uart2 {	/* ttyS2 mainBoardGD */
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart2_pd>;
+};
+
+&uart3 {	/* ttyS3 VDS dryer (RS-485, driver enable on PC3) */
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart3_pb>;
+	/* Same value as stock; the 6.6 SDK UART driver may not parse it. */
+	ingenic,rs485-tx-enable-gpio = <&gpc 3 GPIO_ACTIVE_HIGH INGENIC_GPIO_HIZ>;
+};
+
+&uart4 {	/* ttyS4 heaterBoard */
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart4_pb>;
+};
+
+&uart5 {	/* ttyS5 eBoard */
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart5_pb>;
+};
+
+&uart7 {	/* ttyS7 levelBoard */
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart7_pc>;
+};
+
+/* ---- I2C ---- */
+
+/* Touch is a later milestone; stock drives i2c0 from an out-of-tree module. */
+&i2c0 {
+	status = "disabled";
+};
+
+/* DEVIATION: stock leaves i2c3 enabled with no pin group and no clients. */
+&i2c3 {
+	status = "disabled";
+};
+
+/* ---- eMMC: as stock ---- */
+
+&msc0 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&msc0_8bit_low>, <&msc0_8bit_high>;
+	pinctrl-1 = <&msc0_8bit_high>;
+	mmc-hs200-1_8v;
+	non-removable;
+	max-frequency = <25000000>;	/* stock value */
+	bus-width = <8>;
+	voltage-ranges = <1800 3300>;
+	ingenic,rst-gpios = <0>;
+};
+
+/* DEVIATION: not used on this board; its pins overlap MSC0. */
+&sfc {
+	status = "disabled";
+};
+
+/* ---- USB: as stock. The OTG port carries the internal hub (Wi-Fi, camera,
+ * front USB socket); the second controller is host-only. ---- */
+
+&otg_phy {
+	status = "okay";
+	external-vbus-detect;
+};
+
+&usb_phy {
+	status = "okay";
+	external-vbus-detect;
+	disable-sw-switch-id;
+};
+
+&otg {
+	status = "okay";
+	dr_mode = "otg";
+};
+
+&usb {
+	status = "okay";
+	dr_mode = "host";
+};
+
+/*
+ * Ethernet: stock enables no MAC node and never loads its MAC driver, so
+ * the board is treated as having no Ethernet. mac0 stays disabled (its RMII
+ * pins could be in use for something else on this board).
+ */
+
+/* ---- DMA: as stock ---- */
+
+&pdma {
+	status = "okay";
+};
+
+&pdma1 {
+	status = "okay";
+};
+
+/*
+ * The RISC-V core runs the RTOS the SPL started; Linux leaves it alone
+ * (CONFIG_REMOTEPROC is off). Audio and the video/JPEG blocks are not used.
+ */
+&riscv {
+	status = "disabled";
+};
