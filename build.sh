@@ -47,7 +47,15 @@ if [ "$(git -C "$OW" describe --tags --exact-match 2>/dev/null)" != "$OPENWRT_TA
 	git -C "$OW" fetch --tags
 	git -C "$OW" checkout -q "$OPENWRT_TAG"
 fi
-ln -sfn "$REPO/feed/x2600" "$OW/target/linux/x2600"
+# Copy (not symlink) the target: the repo usually sits on a Windows drive
+# where every file looks 0777, so take file modes from the git index.
+log "sync target/linux/x2600"
+rm -rf "$OW/target/linux/x2600"
+mkdir -p "$OW/target/linux/x2600"
+(cd "$REPO/feed/x2600" && tar -cf - .) | tar -xf - -C "$OW/target/linux/x2600" --no-same-permissions
+find "$OW/target/linux/x2600" -type d -exec chmod 0755 {} + -o -type f -exec chmod 0644 {} +
+git -C "$REPO" ls-files -s feed/x2600 | awk '$1 == "100755" { sub(/^feed\/x2600\//, "", $4); print $4 }' |
+	while IFS= read -r f; do chmod 0755 "$OW/target/linux/x2600/$f"; done
 
 if [ ! -d "$OW/feeds/packages" ]; then
 	log "feeds"
