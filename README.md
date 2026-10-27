@@ -7,6 +7,7 @@ stock system stays in the other slot.
 Status: builds and passes the QEMU system tests (`test/qemu/run.sh`); not
 yet run on a printer.
 
+- `docs/usb-test.md`: zero-write test boot from a USB stick (first step)
 - `docs/install.md`: backup, install, test boot, going back to stock
 - `docs/recovery.md`: safety mechanisms and every failure case
 - `docs/build.md`: building in WSL
