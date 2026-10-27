@@ -1,43 +1,43 @@
 # shellcheck shell=sh
 # shellcheck disable=SC3043,SC1091  # busybox ash supports 'local'; slot.sh is on the target
 #
-# Try-once boot: on every boot from an eMMC slot, point the SPL boot flag at
-# the other (stock) slot before anything else can hang. /etc/init.d/c5-booted
-# points it back at this slot once the system is healthy. Runs in
-# preinit_main before 80_mount_root (procd has mounted /proc, /sys, /dev with
-# device nodes and /tmp; the root is still the read-only squashfs).
-#
-# Exception: when stock is marked invalid (a restore of stock was
-# interrupted or failed, see lib/c5/restore.sh) or stock's slot does not
-# start with a uImage kernel and a squashfs root, the flag stays on (or is
-# put back on) this slot: a fallback to a broken stock could not be undone.
-# On a chainload test with a kernel that is not this slot's (c5.nocommit=1)
-# the flag is then left alone instead, since this slot's kernel is untested.
+# Count consecutive boots before the overlay is mounted. Healthy boots
+# reset the counter in c5-booted; untested chainloaded kernels do not count.
 
 c5_tryboot() {
 	. /lib/c5/slot.sh
-	local own other why
+	local own other why n
 	own=$(c5_own_slot) || {
 		c5_bootlog "tryboot: root $(c5_root_dev) is not an eMMC slot; flag untouched"
 		return 0
 	}
-	other=$(c5_other_slot)
 	c5_bootlog_reset
+	if c5_nocommit; then
+		c5_bootlog "tryboot: slot $own booting (c5.nocommit=1); counter and flag untouched"
+		return 0
+	fi
+	n=$(c5_tries_read) || {
+		c5_bootlog "tryboot: cannot read boot counter; flag untouched"
+		return 0
+	}
+	n=$((n + 1))
 	why=$(c5_stock_blocker) || why=
-	if [ -n "$why" ]; then
-		if c5_nocommit; then
-			c5_bootlog "tryboot: slot $own booting (c5.nocommit=1); $why; flag untouched ('$(c5_flag_read)')"
-		elif c5_flag_write "$own"; then
-			c5_bootlog "tryboot: slot $own booting; $why; flag stays on slot $own (NO fallback)"
+	if [ "$n" -gt "$C5_TRIES_MAX" ] && [ -z "$why" ]; then
+		other=$(c5_other_slot)
+		if c5_flag_write "$other"; then
+			c5_tries_write 0 || c5_bootlog "tryboot: counter reset FAILED"
+			c5_bootlog "tryboot: slot $own failed $C5_TRIES_MAX boots; flag -> slot $other (stock); rebooting"
+			reboot -f
 		else
-			c5_bootlog "tryboot: $why; FLAG WRITE FAILED (flag now '$(c5_flag_read)')"
+			c5_bootlog "tryboot: FLAG WRITE FAILED (flag now '$(c5_flag_read)')"
 		fi
 		return 0
 	fi
-	if c5_flag_write "$other"; then
-		c5_bootlog "tryboot: slot $own booting; flag -> slot $other (fallback armed)"
+	c5_tries_write "$n" || c5_bootlog "tryboot: counter write FAILED"
+	if [ -n "$why" ]; then
+		c5_bootlog "tryboot: slot $own booting; tries=$n; $why; flag untouched (NO fallback)"
 	else
-		c5_bootlog "tryboot: FLAG WRITE FAILED (flag now '$(c5_flag_read)')"
+		c5_bootlog "tryboot: slot $own booting; tries=$n/$C5_TRIES_MAX; flag untouched"
 	fi
 }
 

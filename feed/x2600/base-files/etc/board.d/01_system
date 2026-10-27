@@ -7,7 +7,11 @@ board_config_update
 
 case "$(board_name)" in
 flashforge,creator5pro)
-	ucidef_set_hostname "creator5pro"
+	model=$(cut -d' ' -f1 /etc/c5/model 2>/dev/null)
+	case "$model" in
+		Creator5) ucidef_set_hostname "creator5" ;;
+		*) ucidef_set_hostname "creator5pro" ;;
+	esac
 	;;
 esac
 

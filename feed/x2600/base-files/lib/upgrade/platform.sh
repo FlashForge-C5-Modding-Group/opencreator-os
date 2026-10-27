@@ -12,25 +12,10 @@
 # platform_copy_config run later from do_stage2 inside the ramfs, so nothing
 # computed in platform_check_image survives - everything is recomputed here.
 #
-# Test-then-commit: the boot flag is pointed at the stock slot before our
-# slot is written and stays there afterwards, also after a verified write.
-# The next boot is therefore stock. The new image becomes the default only
-# after it has booted once and /etc/init.d/c5-booted found it healthy: test
-# it from stock with chainload (c5-chainload.sh stage/go over SSH, or a
-# --chainload install stick), or with switch-to-openwrt.sh (SPL boot,
-# try-once still applies). To make that possible the new kernel is copied to
-# userdata (stock /usr/data) as opencreator-os/chainload/kernel.uimage (the
-# image c5-chainload.sh stages by default; it allows the commit only when
-# that image equals the slot's kernel) and opencreator-os/pending-commit on
-# c5os (OpenWrt's /data) records what was written; c5-booted removes it when
-# it commits. Both are deleted before the slot is written; if they cannot be
-# written again afterwards the upgrade fails (the slot is then only usable
-# through a reinstall from stock), so a stale saved kernel is never staged
-# against a new rootfs.
-#
-# Refused while stock is not selectable (c5_stock_blocker: marked invalid by
-# an unfinished restore, or no uImage/squashfs in its slot): the upgrade
-# makes the next boot stock.
+# Known-good kernels can boot directly with the counter protecting them.
+# Changed kernels keep the flag on stock until a healthy test boot commits
+# pending-commit on c5os. Their chainload kernel is staged on stock's
+# userdata so stock can test-boot the newly written slot.
 #
 # Config: platform_copy_config stores $UPGRADE_BACKUP on c5os as
 # opencreator-os/sysupgrade.tgz; preinit 79_c5_move_config moves it to
@@ -57,8 +42,13 @@ c5_su_member() { # <tar> <dir> <name>
 	tar xOf "$1" "$2$3" 2>/dev/null
 }
 
+# Runs with c5os mounted at /tmp/c5-c5os.
+c5_read_good_kernel() {
+	cat /tmp/c5-c5os/opencreator-os/good-kernel 2>/dev/null
+}
+
 platform_check_image() {
-	local tar="$1" own dir ksz rsz kmax rmax why
+	local tar="$1" own dir ksz rsz kmax rmax why ksum good
 	own=$(c5_own_slot) || { v "root $(c5_root_dev) is not an eMMC slot; refusing"; return 1; }
 	dir=$(c5_su_dir "$tar") || { v "not a sysupgrade tar"; return 1; }
 	[ "$(c5_su_member "$tar" "$dir" kernel | head -c 4 | hexdump -ve '1/1 "%02x"')" = 27051956 ] ||
@@ -71,8 +61,10 @@ platform_check_image() {
 	rmax=$(c5_part_bytes "$(c5_slot_rname "$own")") || { v "cannot size the rootfs partition"; return 1; }
 	[ "$ksz" -le "$kmax" ] || { v "kernel too large ($ksz > $kmax)"; return 1; }
 	[ "$rsz" -le "$rmax" ] || { v "rootfs too large ($rsz > $rmax)"; return 1; }
-	if why=$(c5_stock_blocker); then
-		v "refusing: sysupgrade reboots into stock, but $why; repair stock first (c5-restore-stock)"
+	ksum=$(c5_su_member "$tar" "$dir" kernel | sha256sum | cut -d' ' -f1)
+	good=$(c5_with_part c5os /tmp/c5-c5os ro,noload c5_read_good_kernel) || good=
+	if [ "$ksum" != "$good" ] && why=$(c5_stock_blocker); then
+		v "refusing: sysupgrade reboots into stock, but $why; repair stock with the installer first"
 		return 1
 	fi
 	return 0
@@ -166,13 +158,9 @@ c5_store_pending() {
 }
 
 platform_do_upgrade() {
-	local tar="$1" own other dir kdev rdev rmax ksum rsum ksz rsz why
+	local tar="$1" own other dir kdev rdev rmax ksum rsum ksz rsz why good known=0
 	own=$(c5_own_slot) || { v "root $(c5_root_dev) is not an eMMC slot; not writing"; return 1; }
 	other=$(c5_other_slot)
-	if why=$(c5_stock_blocker); then
-		v "not writing: the next boot would be stock, but $why"
-		return 1
-	fi
 	dir=$(c5_su_dir "$tar") || { v "not a sysupgrade tar"; return 1; }
 	kdev=$(c5_part_dev "$(c5_slot_kname "$own")") || { v "kernel partition not found"; return 1; }
 	rdev=$(c5_part_dev "$(c5_slot_rname "$own")") || { v "rootfs partition not found"; return 1; }
@@ -181,12 +169,25 @@ platform_do_upgrade() {
 	rsum=$(c5_su_member "$tar" "$dir" root | sha256sum | cut -d' ' -f1)
 	ksz=$(c5_su_member "$tar" "$dir" kernel | wc -c)
 	rsz=$(c5_su_member "$tar" "$dir" root | wc -c)
+	good=$(c5_with_part c5os /tmp/c5-c5os ro,noload c5_read_good_kernel) || good=
+	[ "$ksum" != "$good" ] || known=1
+	if [ "$known" = 0 ] && why=$(c5_stock_blocker); then
+		v "not writing: the next boot would be stock, but $why"
+		return 1
+	fi
 
-	c5_drop_pending ||
-		{ v "cannot remove the saved chainload kernel (userdata) / pending-commit (c5os): $C5_SU_PART failed; not writing"; return 1; }
-
-	v "Pointing the boot flag at stock (slot $other); it stays there after the write"
-	c5_flag_write "$other" || { v "boot flag write failed; not writing"; return 1; }
+	if [ "$known" = 1 ]; then
+		c5_with_part c5os /tmp/c5-c5os rw,noatime c5_drop_commit ||
+			{ v "cannot remove pending-commit on c5os; not writing"; return 1; }
+		v "Known-good kernel; keeping the boot flag on OpenWrt (slot $own)"
+		c5_flag_write "$own" || { v "boot flag write failed; not writing"; return 1; }
+	else
+		c5_drop_pending ||
+			{ v "cannot remove the saved chainload kernel (userdata) / pending-commit (c5os): $C5_SU_PART failed; not writing"; return 1; }
+		v "Pointing the boot flag at stock (slot $other); it stays there after the write"
+		c5_flag_write "$other" || { v "boot flag write failed; not writing"; return 1; }
+	fi
+	c5_tries_write 0 || { v "boot counter reset failed; not writing"; return 1; }
 	c5_bootlog "sysupgrade: writing slot $own"
 
 	v "Writing kernel ($ksz bytes) to $kdev"
@@ -197,11 +198,19 @@ platform_do_upgrade() {
 
 	if [ "$(head -c "$ksz" "$kdev" | sha256sum | cut -d' ' -f1)" != "$ksum" ] ||
 	   [ "$(head -c "$rsz" "$rdev" | sha256sum | cut -d' ' -f1)" != "$rsum" ]; then
-		v "READ-BACK MISMATCH: boot flag stays on stock (slot $other)"
-		c5_bootlog "sysupgrade: READ-BACK MISMATCH on slot $own; flag stays on slot $other"
+		v "READ-BACK MISMATCH on slot $own"
+		c5_bootlog "sysupgrade: READ-BACK MISMATCH on slot $own; flag is '$(c5_flag_read)'"
 		return 1
 	fi
 	c5_wipe_overlay "$rdev" "$rmax" || v "warning: could not clear the old overlay"
+	if [ "$known" = 1 ]; then
+		if [ -z "$UPGRADE_BACKUP" ]; then
+			c5_with_part c5os /tmp/c5-c5os rw,noatime rm -f /tmp/c5-c5os/opencreator-os/sysupgrade.tgz || return 1
+		fi
+		c5_bootlog "sysupgrade: slot $own written and verified; known-good kernel; flag stays on OpenWrt"
+		v "Slot $own written and verified. Known-good kernel; next boot is OpenWrt."
+		return 0
+	fi
 	c5_bootlog "sysupgrade: slot $own written and verified; flag stays on stock (slot $other) until a test boot commits it"
 
 	C5_SU_TAR=$tar C5_SU_DIR=$dir C5_SU_SLOT=$own C5_SU_RDEV=$rdev C5_SU_KSUM=$ksum C5_SU_RSUM=$rsum

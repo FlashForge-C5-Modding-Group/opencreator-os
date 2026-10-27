@@ -1,0 +1,26 @@
+#!/bin/sh
+# shellcheck disable=SC1091
+
+. /lib/c5/slot.sh
+
+if [ ! -s "$C5_OCDIR/model" ]; then
+	logger -t c5-usb-hook "no stored model; skipping USB hook"
+	exit 0
+fi
+read -r machine pid < "$C5_OCDIR/model"
+case "$machine $pid" in
+	'Creator5Pro 0029'|'Creator5 0028') ;;
+	*) logger -t c5-usb-hook "invalid stored model; skipping USB hook"; exit 0 ;;
+esac
+
+mkdir -p /mnt
+for dev in /dev/sd[a-z][0-9]* /dev/sd[a-z]; do
+	[ -b "$dev" ] || continue
+	mount -t vfat -o rw "$dev" /mnt 2>/dev/null || continue
+	if [ -f /mnt/runFirmwareExe.sh ]; then
+		logger -t c5-usb-hook "running /mnt/runFirmwareExe.sh from $dev"
+		sh /mnt/runFirmwareExe.sh "$machine" "$pid" || :
+	fi
+	umount /mnt || logger -t c5-usb-hook "cannot unmount /mnt"
+	exit 0
+done

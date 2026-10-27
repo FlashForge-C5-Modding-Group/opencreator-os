@@ -8,11 +8,10 @@
 #
 # Layout (GPT names on the eMMC): kernel/rootfs = slot 1, kernel2/rootfs2 =
 # slot 2, ota = boot flag ("ota:kernel" -> slot 1, "ota:kernel2" -> slot 2,
-# the SPL compares the first 11 bytes), userdata = stock /usr/data, c5os =
-# OpenWrt's /data (created by the stock-side installer by shrinking userdata).
+# the SPL compares the first 11 bytes), c5os = OpenWrt's /data.
 #
 # Overridable for testing: C5_DISK, C5_CMDLINE_FILE, C5_SYSBLOCK, C5_KMSG,
-# C5_MOUNTS, C5_DATA, C5_OCDIR, C5_UDATA, C5_REBOOT_MARK.
+# C5_MOUNTS, C5_DATA, C5_OCDIR, C5_UDATA.
 
 C5_DISK=${C5_DISK:-/dev/mmcblk0}
 C5_CMDLINE_FILE=${C5_CMDLINE_FILE:-/proc/cmdline}
@@ -21,24 +20,19 @@ C5_KMSG=${C5_KMSG:-/dev/kmsg}
 C5_MOUNTS=${C5_MOUNTS:-/proc/mounts}
 C5_DATA=${C5_DATA:-/data}                       # c5os mount point (fstab)
 C5_OCDIR=${C5_OCDIR:-$C5_DATA/opencreator-os}   # logs, pending-commit, sysupgrade.tgz
-# Transient mount point of userdata (stock /usr/data): OpenWrt mounts it only
-# for files stock wrote (opencreator-os/stock, wifi.conf, authorized_keys)
-# or reads (opencreator-os/chainload/kernel.uimage, staged by stock's
-# c5-chainload.sh), see c5_with_part.
+# Transient mount for the stock restore source and staged chainload kernel.
 C5_UDATA=${C5_UDATA:-/tmp/c5-userdata}
-# Created by the USB recovery hook right before it reboots; tells c5-booted
-# (which may still run while the reboot is in progress) to leave the flag.
-C5_REBOOT_MARK=${C5_REBOOT_MARK:-/tmp/c5-recovery.reboot}
 C5_BOOTLOG_SECTOR=128      # bootlog lives at 64 KiB inside the ota partition ...
 C5_BOOTLOG_SECTORS=128     # ... and is 64 KiB long
 C5_BOOTLOG_MAGIC=C5BOOTLOG1
-# One sector at 128 KiB inside ota: "<magic> <reason>" while stock's slot or
-# usershare may be half written (lib/c5/restore.sh sets it before the first
-# write and clears it after the last verified one). While it is set the flag
-# must not point at stock. A raw sector, so preinit can read it before any
-# filesystem is mounted, and it does not depend on userdata being healthy.
+# Stock-invalid sector: restore.sh sets it before writing stock and clears
+# it after read-back. Never select stock while it is set.
 C5_STOCKINV_SECTOR=256
 C5_STOCKINV_MAGIC=C5STOCKINVALID1
+C5_TRIES_SECTOR=384
+C5_TRIES_MAGIC=C5TRIES1
+# shellcheck disable=SC2034  # read by the preinit hook
+C5_TRIES_MAX=3
 
 # $1 = GPT partition name -> /dev/mmcblk0pN (return 1 if unknown)
 c5_part_dev() {
@@ -115,10 +109,8 @@ c5_drop_caches() {
 }
 
 # $1 = 1|2 ; whole-sector write, NUL padded, read back.
-# Refused on a USB test boot (c5_usbtest).
 c5_flag_write() {
 	local s dev
-	c5_usbtest && return 1
 	dev=$(c5_part_dev ota) || return 1
 	case "$1" in
 		1) s="ota:kernel" ;;
@@ -130,11 +122,30 @@ c5_flag_write() {
 	[ "$(c5_flag_read)" = "$s" ]
 }
 
+c5_tries_read() {
+	local dev
+	dev=$(c5_part_dev ota) || return 1
+	dd if="$dev" bs=512 skip="$C5_TRIES_SECTOR" count=1 2>/dev/null |
+		tr -d '\000' |
+		awk -v m="$C5_TRIES_MAGIC" '
+			NR == 1 && $0 ~ "^" m " [0-9]+$" && $2 <= 2147483646 { n=$2; ok=1 }
+			END { printf "%d\n", NR == 1 && ok ? n : 0 }'
+}
+
+c5_tries_write() {
+	local dev
+	case "$1" in ''|*[!0-9]*) return 1 ;; esac
+	[ "${#1}" -le 10 ] && [ "$1" -le 2147483646 ] || return 1
+	dev=$(c5_part_dev ota) || return 1
+	printf '%s %s' "$C5_TRIES_MAGIC" "$1" |
+		dd of="$dev" bs=512 seek="$C5_TRIES_SECTOR" count=1 conv=sync,notrunc,fsync 2>/dev/null || return 1
+	c5_drop_caches
+	[ "$(c5_tries_read)" -eq "$1" ]
+}
+
 # ota device if it is large enough to hold the bootlog area, else return 1.
-# Not used on a USB test boot (c5_usbtest): bootlog lines go to kmsg only.
 c5_bootlog_dev() {
 	local dev bytes
-	c5_usbtest && return 1
 	dev=$(c5_part_dev ota) || return 1
 	bytes=$(c5_part_bytes ota) || return 1
 	[ "$bytes" -ge $(((C5_BOOTLOG_SECTOR + C5_BOOTLOG_SECTORS) * 512)) ] || return 1
@@ -188,6 +199,16 @@ c5_bootlog() {
 # First 4 bytes of a file or device as lowercase hex.
 c5_magic_hex() { head -c 4 "$1" 2>/dev/null | hexdump -ve '1/1 "%02x"'; }
 
+# Hash only the uImage header and payload, not partition padding.
+c5_kernel_sum() {
+	local size
+	[ "$(c5_magic_hex "$1")" = 27051956 ] || return 1
+	size=$(hexdump -s 12 -n 4 -e '4/1 "%02x"' "$1") || return 1
+	[ "${#size}" = 8 ] || return 1
+	size=$((0x$size + 64))
+	head -c "$size" "$1" | sha256sum | cut -d' ' -f1
+}
+
 # $1 = device: is it mounted anywhere?
 c5_mounted() { awk -v d="$1" '$1 == d { f = 1 } END { exit !f }' "$C5_MOUNTS"; }
 
@@ -196,10 +217,8 @@ c5_is_mountpoint() { awk -v m="$1" '$2 == m { f = 1 } END { exit !f }' "$C5_MOUN
 
 # NAME MNT OPTS CMD...: mount the ext4 partition NAME at MNT with OPTS, run
 # CMD, sync, unmount. Returns CMD's status, or 1 (with a bootlog line) when
-# the partition is missing or cannot be mounted. A partition that is already
-# mounted elsewhere (e.g. userdata at /data on a system without c5os) is
-# bind-mounted from there instead when the mount fails: a second mount that
-# would change the read-only state of a mounted filesystem fails with EBUSY.
+# the partition is missing or cannot be mounted. An already mounted
+# partition is bind-mounted instead if a second mount fails with EBUSY.
 c5_with_part() {
 	local name="$1" mnt="$2" opts="$3" dev mp rc
 	shift 3
@@ -251,7 +270,6 @@ c5_stock_invalid() {
 # $* = reason; written with fsync and read back.
 c5_stock_invalid_set() {
 	local dev
-	c5_usbtest && return 1
 	dev=$(c5_stockinv_dev) || return 1
 	printf '%s %s' "$C5_STOCKINV_MAGIC" "$*" | head -c 500 |
 		dd of="$dev" bs=512 seek="$C5_STOCKINV_SECTOR" count=1 conv=sync,notrunc,fsync 2>/dev/null || return 1
@@ -261,7 +279,6 @@ c5_stock_invalid_set() {
 
 c5_stock_invalid_clear() {
 	local dev
-	c5_usbtest && return 1
 	dev=$(c5_stockinv_dev) || return 1
 	dd if=/dev/zero of="$dev" bs=512 seek="$C5_STOCKINV_SECTOR" count=1 conv=notrunc,fsync 2>/dev/null || return 1
 	c5_drop_caches
@@ -272,23 +289,6 @@ c5_stock_invalid_clear() {
 # (c5-chainload.sh adds c5.nocommit=1): never point the flag at this slot.
 c5_nocommit() {
 	tr -s ' \t' '\n' < "$C5_CMDLINE_FILE" 2>/dev/null | grep -qx 'c5\.nocommit=1'
-}
-
-# Zero-write USB test boot (c5.usbtest=1, added by the test stick's hook):
-# root is the stick's second partition and nothing may be written to the
-# eMMC, so the boot flag, bootlog and stock-invalid writers refuse.
-c5_usbtest() {
-	tr -s ' \t' '\n' < "$C5_CMDLINE_FILE" 2>/dev/null | grep -qx 'c5\.usbtest=1'
-}
-
-# FAT partition of the test stick (root=/dev/sdX2 -> /dev/sdX1).
-c5_usbtest_fat() {
-	local r
-	r=$(c5_root_dev)
-	case "$r" in
-		/dev/sd[a-z]2) echo "${r%2}1" ;;
-		*) return 1 ;;
-	esac
 }
 
 # Is there a reason the flag must not point at stock (the other slot)?

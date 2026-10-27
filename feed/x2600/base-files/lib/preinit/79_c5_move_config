@@ -1,18 +1,10 @@
 # shellcheck shell=sh
 # shellcheck disable=SC3043,SC1091  # busybox ash supports 'local'; slot.sh is on the target
 #
-# Runs in the preinit_mount_root hook: the overlay is mounted and / is
-# writable. Imports
-#  - from c5os (OpenWrt's /data): opencreator-os/sysupgrade.tgz (stored by
-#    platform_copy_config) is moved to /sysupgrade.tgz, which 80_mount_root
-#    extracts right after this hook and /etc/init.d/done deletes;
-#  - from userdata (stock /usr/data): opencreator-os/wifi.conf and
-#    opencreator-os/authorized_keys (written by the stock-side installer)
-#    when the overlay has no copy yet.
-# On a USB test boot (c5.usbtest=1) the eMMC is not mounted at all: the two
-# files come from opencreator-os-test/ on the test stick's FAT partition.
+# Import installer settings and saved sysupgrade config from c5os before
+# uci-defaults and fstab run.
 
-# $1 = directory holding wifi.conf / authorized_keys
+# $1 = directory holding installer settings
 c5_import_creds() {
 	mkdir -p /etc/c5 /etc/dropbear
 	if [ -s "$1/wifi.conf" ] && [ ! -s /etc/c5/wifi.conf ]; then
@@ -23,11 +15,15 @@ c5_import_creds() {
 		cp "$1/authorized_keys" /etc/dropbear/authorized_keys &&
 			chmod 600 /etc/dropbear/authorized_keys
 	fi
+	if [ -s "$1/model" ] && [ ! -s /etc/c5/model ]; then
+		tr -d '\r' < "$1/model" > /etc/c5/model
+	fi
 }
 
 # Runs with c5os mounted at /tmp/c5-c5os (c5_with_part).
 c5_take_sysupgrade() {
 	local f=/tmp/c5-c5os/opencreator-os/sysupgrade.tgz
+	c5_import_creds /tmp/c5-c5os/opencreator-os
 	[ -f "$f" ] || return 0
 	if mv -f "$f" /sysupgrade.tgz; then
 		c5_bootlog "move_config: sysupgrade.tgz staged for restore"
@@ -38,30 +34,6 @@ c5_take_sysupgrade() {
 
 c5_move_config() {
 	. /lib/c5/slot.sh
-	local dev mnt=/tmp/c5-stick
-	if c5_usbtest; then
-		dev=$(c5_usbtest_fat) || {
-			c5_bootlog "move_config: USB test, but root $(c5_root_dev) is not /dev/sdX2"
-			return 0
-		}
-		mkdir -p "$mnt"
-		mount -t vfat -o ro "$dev" "$mnt" 2>/dev/null || {
-			c5_bootlog "move_config: USB test, mounting $dev failed"
-			return 0
-		}
-		c5_import_creds "$mnt/opencreator-os-test"
-		umount "$mnt"
-		return 0
-	fi
-	if ! dev=$(c5_part_dev userdata); then
-		c5_bootlog "move_config: no userdata partition"
-	elif mkdir -p "$C5_UDATA" && mount -t ext4 -o rw,noatime "$dev" "$C5_UDATA" 2>/dev/null; then
-		c5_import_creds "$C5_UDATA/opencreator-os"
-		sync
-		umount "$C5_UDATA"
-	else
-		c5_bootlog "move_config: userdata mount failed"
-	fi
 	c5_with_part c5os /tmp/c5-c5os rw,noatime c5_take_sysupgrade
 }
 

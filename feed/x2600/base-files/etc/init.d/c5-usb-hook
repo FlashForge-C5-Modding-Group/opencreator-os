@@ -1,0 +1,8 @@
+#!/bin/sh /etc/rc.common
+# shellcheck disable=SC2034  # START is read by /etc/rc.common
+
+START=19
+
+boot() {
+	/usr/libexec/c5-usb-hook
+}

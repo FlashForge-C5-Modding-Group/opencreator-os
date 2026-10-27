@@ -1,102 +1,44 @@
 #!/bin/sh /etc/rc.common
 # shellcheck disable=SC1091,SC3043,SC2034  # START is read by /etc/rc.common
 #
-# End of the try-once boot: preinit (05_c5_tryboot) pointed the boot flag at
-# the stock slot; once this boot is healthy, point it back at our slot. That
-# also commits a sysupgrade or install that is booting for the first time:
-# /data/opencreator-os/pending-commit (written by sysupgrade; /data is the
-# c5os partition) is removed.
-#
-# Healthy = all of
-#  - /data (c5os) mounted, no test marker /data/opencreator-os/tryboot-fail-test;
-#  - Wi-Fi credentials present (/etc/c5/wifi.conf or wireless.c5sta.ssid):
-#    without them the printer cannot be reached, so it is never committed;
-#  - within C5_READY_TIMEOUT (120) seconds: an IPv4 address of global scope
-#    on an interface other than lo, dropbear running and a socket listening
-#    on TCP port 22.
-# The flag is never touched when the kernel was chainloaded without being
-# this slot's own kernel (c5.nocommit=1, set by c5-chainload.sh) or while
-# the USB recovery hook is rebooting (/tmp/c5-recovery.reboot).
-#
-# The check runs in the background so the wait does not hold up the boot.
-# Test overrides: C5_READY_TIMEOUT, C5_PROCNET, C5_WIFI_CONF.
+# Reaching START=99 with c5os mounted is healthy. Reset failed boots,
+# commit a pending upgrade, and remember this slot's tested kernel.
 
 START=99
 
-c5_wifi_creds() {
-	[ -s "${C5_WIFI_CONF:-/etc/c5/wifi.conf}" ] || [ -n "$(uci -q get wireless.c5sta.ssid 2>/dev/null)" ]
-}
-
-c5_ipv4_up() {
-	ip -o -4 addr show scope global 2>/dev/null | awk '$2 != "lo" { f = 1 } END { exit !f }'
-}
-
-c5_ssh_listening() {
-	local f
-	for f in "${C5_PROCNET:-/proc/net}/tcp" "${C5_PROCNET:-/proc/net}/tcp6"; do
-		[ -r "$f" ] && cat "$f"
-	done | awk '$2 ~ /:0016$/ && $4 == "0A" { f = 1 } END { exit !f }'
-}
-
-c5_net_ready() {
-	pidof dropbear > /dev/null && c5_ssh_listening && c5_ipv4_up
-}
-
 c5_booted_check() {
 	. /lib/c5/slot.sh
-	local own why='' logs="$C5_OCDIR/logs" pending="$C5_OCDIR/pending-commit" data=0 ver t=0
-	local timeout="${C5_READY_TIMEOUT:-120}"
-
-	if [ -e "$C5_REBOOT_MARK" ]; then
-		c5_bootlog "booted: USB recovery is rebooting; flag untouched"
-		return 0
-	fi
+	local own logs="$C5_OCDIR/logs" pending="$C5_OCDIR/pending-commit" ver dev sum
 
 	/usr/libexec/c5-wifi-sta
-
-	c5_is_mountpoint "$C5_DATA" && data=1
-
 	if ! own=$(c5_own_slot); then
 		c5_bootlog "booted: root $(c5_root_dev) is not an eMMC slot; flag untouched"
 	elif c5_nocommit; then
 		c5_bootlog "booted: chainloaded kernel is not slot $own's own kernel (c5.nocommit=1); flag untouched ('$(c5_flag_read)')"
+	elif ! c5_is_mountpoint "$C5_DATA"; then
+		c5_bootlog "booted: NOT healthy ($C5_DATA not mounted); flag stays '$(c5_flag_read)'"
 	else
-		[ "$data" = 1 ] || why="$why $C5_DATA not mounted;"
-		[ -e "$C5_OCDIR/tryboot-fail-test" ] && why="$why tryboot-fail-test marker present;"
-		c5_wifi_creds || why="$why no Wi-Fi credentials imported;"
-		if [ -z "$why" ]; then
-			while ! c5_net_ready; do
-				if [ "$t" -ge "$timeout" ]; then
-					pidof dropbear > /dev/null || why="$why dropbear not running;"
-					c5_ssh_listening || why="$why nothing listening on TCP 22;"
-					c5_ipv4_up || why="$why no IPv4 address on a network interface;"
-					why="$why (waited ${timeout}s)"
-					break
-				fi
-				sleep 1
-				t=$((t + 1))
-			done
-		fi
-		if [ -e "$C5_REBOOT_MARK" ]; then
-			c5_bootlog "booted: USB recovery is rebooting; flag untouched"
-			return 0
-		fi
-		if [ -n "$why" ]; then
-			c5_bootlog "booted: NOT healthy ($why ); flag stays '$(c5_flag_read)'"
-		elif c5_flag_write "$own"; then
-			c5_bootlog "booted: network up after ${t}s; flag -> slot $own (OpenWrt)"
-			if [ -f "$pending" ] && [ "$(sed -n 's/^slot=//p' "$pending")" = "$own" ]; then
+		c5_tries_write 0 || c5_bootlog "booted: counter reset FAILED"
+		if [ -f "$pending" ] && [ "$(sed -n 's/^slot=//p' "$pending")" = "$own" ]; then
+			if c5_flag_write "$own"; then
 				ver=$(sed -n 's/^version=//p' "$pending")
 				rm -f "$pending"
-				c5_bootlog "booted: committed sysupgrade ${ver:-?} in slot $own"
+				c5_bootlog "booted: committed sysupgrade ${ver:-?} in slot $own; flag -> slot $own (OpenWrt)"
+			else
+				c5_bootlog "booted: FLAG WRITE FAILED; flag stays '$(c5_flag_read)'"
 			fi
+		fi
+		mkdir -p "$C5_OCDIR"
+		if dev=$(c5_part_dev "$(c5_slot_kname "$own")") && sum=$(c5_kernel_sum "$dev") &&
+			printf '%s\n' "$sum" > "$C5_OCDIR/good-kernel.new" &&
+			mv -f "$C5_OCDIR/good-kernel.new" "$C5_OCDIR/good-kernel"; then
+			c5_bootlog "booted: slot $own healthy; good kernel recorded"
 		else
-			c5_bootlog "booted: FLAG WRITE FAILED; flag stays '$(c5_flag_read)'"
+			c5_bootlog "booted: slot $own healthy; recording good kernel FAILED"
 		fi
 	fi
 
-	# a USB test boot mounts /data read-only; c5-usbtest writes to the stick
-	[ "$data" = 1 ] && ! c5_usbtest || return 0
+	c5_is_mountpoint "$C5_DATA" || return 0
 	mkdir -p "$logs"
 	dmesg > "$logs/dmesg-last.txt" 2>&1
 	logread > "$logs/logread-last.txt" 2>&1
