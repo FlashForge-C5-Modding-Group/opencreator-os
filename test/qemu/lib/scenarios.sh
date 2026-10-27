@@ -130,7 +130,8 @@ scenario_S1() {
 	check "saved stock rootfs.squashfs = stock squashfs (bytes_used)" is_eq "$(data_cat "$DISK" $ow/stock/rootfs.squashfs | sha256sum | cut -d' ' -f1)" "$STOCK_SQ_SUM"
 	check "stock SHA256SUMS lists both images" bash -c "[ \"\$(debugfs -R 'cat $ow/stock/SHA256SUMS' '$(userdata_spec "$DISK")' 2>/dev/null | awk '{print \$2}' | tr '\n' ' ')\" = 'kernel.img rootfs.squashfs ' ]"
 	check "stock MANIFEST.txt records slot 2" bash -c "debugfs -R 'cat $ow/stock/MANIFEST.txt' '$(userdata_spec "$DISK")' 2>/dev/null | grep -qx 'slot: 2'"
-	check "wifi.conf from usershare wpa_supplicant.conf" is_eq "$(data_cat "$DISK" $ow/wifi.conf)" "SSID='QEMU Test Net'
+	check "wifi.conf from usershare wpa_supplicant.conf" is_eq "$(data_cat "$DISK" $ow/wifi.conf)" "# from stock wpa_supplicant.conf (wifi_conf)
+SSID='QEMU Test Net'
 PSK='qemu-psk-'\\''quoted'\\''-123'"
 	check "install.state = written slot=1" bash -c "debugfs -R 'cat $ow/install.state' '$(userdata_spec "$DISK")' 2>/dev/null | grep -q '^written slot=1 kernel=/dev/mmcblk0p1 rootfs=/dev/mmcblk0p2 '"
 	check "chainload files copied to userdata" bash -c "for f in chainload.ko c5-chainload.sh kernel.uimage; do debugfs -R \"stat $ow/chainload/\$f\" '$(userdata_spec "$DISK")' 2>/dev/null | grep -q '^Inode:' || exit 1; done"
