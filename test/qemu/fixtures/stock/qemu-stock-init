@@ -10,9 +10,9 @@
 # Serial markers: QEMU-STOCK-*. Whatever happens next (reboot requested by
 # a script, or power-off) is decided by busybox init / /qemu-stock-finish.
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
-# The QEMU kernel is a mainline 6.6; the installer insists on stock's kernel
-# release, which it reads through this documented override.
-export C5_UNAME_R=5.10.186+
+# The QEMU kernel is a mainline 6.6; the installer and usbtest.sh insist on
+# stock's kernel release, which they read through these documented overrides.
+export C5_UNAME_R=5.10.186+ C5T_UNAME_R=5.10.186+
 
 echo "QEMU-STOCK-INIT root=$(sed -n 's/.*root=\([^ ]*\).*/\1/p' /proc/cmdline)"
 /etc/init.d/S08mdev start

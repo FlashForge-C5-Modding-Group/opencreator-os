@@ -128,6 +128,9 @@ build_base_disk() {
 	st=$FIX/usershare-stage
 	rm -rf "$st"
 	mkdir -p "$st/wifi"
+	# a printer that has booted once: stock copies /etc to /usr/prog/etc on
+	# its first boot (app_startup.sh) and bind-mounts it on /etc afterwards
+	cp -a "$FIX/stock-stage/etc" "$st/etc"
 	cat > "$st/wifi/wpa_supplicant.conf" <<'EOF'
 ctrl_interface=/var/run/wpa_supplicant
 update_config=1

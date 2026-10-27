@@ -83,6 +83,7 @@ Test-only deviations, all outside the product code:
 | S8 | corrupted `root.squashfs` on the stick: installer aborts on the checksum, nothing written, flag unchanged, stock boots on |
 | S9 | power cut (QEMU killed) while the installer writes the rootfs: flag still on stock, `install-pending` left on userdata, the next boot is stock and the same stick finishes the install |
 | S10 | chainload test of a kernel that is not slot 1's own: command line carries `c5.nocommit=1`, OpenWrt boots, `c5-booted` does not commit, flag stays on stock |
+| S11 | zero-write USB test stick (`tools/make-test-stick.sh`, fake chainload swapped in): stock's hook stages `root=/dev/sda2 c5.usbtest=1 c5.nocommit=1`; OpenWrt boots from the stick and writes `opencreator-os-test/openwrt/summary.txt` (PASS for root, overlay, emmc, data, wifi-conf, ipv4, ssh, fpu; uarts/heartbeat/watchdog/Wi-Fi FAIL in QEMU) with the whole eMMC image byte-identical across the OpenWrt boot. A second boot says `already attempted`; a corrupted `kernel.uimage` is refused. Across the stock boots GPT and p1-p5 stay byte-identical and usershare/userdata keep their files (their superblocks change because stock itself fscks and mounts them read-write) |
 
 ## Not covered
 

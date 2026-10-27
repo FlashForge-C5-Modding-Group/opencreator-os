@@ -540,4 +540,131 @@ scenario_S9() {
 	check "flag still on stock" is_eq "$(img_flag_hex "$DISK")" "$(img_flag_hex "$BASE_DISK")"
 }
 
-ALL_SCENARIOS="S1 S2 S3 S4 S5 S6 S7 S8 S9 S10"
+# S11: zero-write USB test stick (tools/make-test-stick.sh): stock's hook
+# chainloads OpenWrt with its root on the stick, OpenWrt reports to the
+# stick. Nothing may be written to the eMMC.
+
+# make_test_stick IMG [corrupt]: the product stick image from the OpenWrt
+# fixture, with the fake c5-chainload.sh and re-made checksums; "corrupt"
+# flips one byte of kernel.uimage after the checksums were made
+make_test_stick() {
+	local img=$1 vdir=$RUN/vdir/qemu-test t=$RUN/stick-dir
+	rm -rf "$vdir" "$t"
+	mkdir -p "$vdir" "$t"
+	ln -s "$OWRT_SQFS" "$vdir/${OWRT_ART##*/}-root.squashfs"
+	ln -s "$OWRT_ART-kernel.uimage" "$vdir/${OWRT_ART##*/}-kernel.uimage"
+	"$QREPO/tools/make-test-stick.sh" "$vdir" "$img" > "$RUN/make-test-stick.log" 2>&1 || return 1
+	mcopy -s -n -i "$img@@1M" ::opencreator-os-test "$t/" || return 1
+	fake_chainload > "$t/opencreator-os-test/c5-chainload.sh"
+	resum "$t/opencreator-os-test"
+	if [ "${2:-}" = corrupt ]; then
+		printf '\xff' | dd of="$t/opencreator-os-test/kernel.uimage" bs=1 \
+			seek=$(($(stat -c %s "$t/opencreator-os-test/kernel.uimage") / 2)) conv=notrunc status=none
+	fi
+	mcopy -o -i "$img@@1M" "$t/opencreator-os-test/c5-chainload.sh" "$t/opencreator-os-test/SHA256SUMS" \
+		"$t/opencreator-os-test/MD5SUMS" "$t/opencreator-os-test/kernel.uimage" ::opencreator-os-test/
+}
+stick_test_cat() { mtype -i "$1@@1M" "::opencreator-os-test/$2" 2>/dev/null | tr -d '\r'; }
+
+# img_regions DISK: sha256 per region - GPT head (LBA 0..2047), p1..p7, the
+# rest (backup GPT)
+img_regions() {
+	local p end
+	echo "head $(img_bytes "$1" 0 $((PSTART[1] * 512)) | sha256sum | cut -c1-16)"
+	for p in 1 2 3 4 5 6; do
+		echo "p$p $(img_part_sum "$1" "$p" $((PSIZE[$p] * 512)) | cut -c1-16)"
+	done
+	end=$(sgdisk -i 7 "$1" | sed -n 's/^Last sector: \([0-9]*\).*/\1/p')
+	echo "p7 $(img_bytes "$1" "$(poff 7)" $(((end + 1 - PSTART[7]) * 512)) | sha256sum | cut -c1-16)"
+	echo "tail $(tail -c +$(((end + 1) * 512 + 1)) "$1" | sha256sum | cut -c1-16)"
+}
+# fs_tree DISK PART OUTDIR: file tree of an ext4 partition (contents only)
+fs_tree() {
+	rm -rf "$3"
+	mkdir -p "$3"
+	debugfs -R "rdump / $3" "$1?offset=$(poff "$2")" >/dev/null 2>&1
+}
+
+scenario_S11() {
+	if [ ! -f "$QREPO/tools/make-test-stick.sh" ]; then
+		SKIP_WHY="tools/make-test-stick.sh not in the tree"
+		return 77
+	fi
+	new_disk
+	local stick=$RUN/stick-s11.img st r r0 r1 r2 sum0 sum1 summary cl
+	make_test_stick "$stick" || { fatal "make-test-stick.sh failed: $(tail -n 2 "$RUN/make-test-stick.log" | tr '\n' ' ')"; return 0; }
+	img_regions "$DISK" > "$RUN/regions-0.txt"
+	fs_tree "$DISK" 6 "$RUN/tree0-usershare"
+	fs_tree "$DISK" 7 "$RUN/tree0-userdata"
+
+	st=$RUN/s11-stock.steps
+	steps_stock "$st"
+	boot s11-stock "$DISK" "$(spl_root "$DISK")" "$st" "$stick"
+	check "stock hook staged and jumped to root=/dev/sda2" is_eq "$(boot_outcome s11-stock)" chainload:/dev/sda2
+	cl=$(chainload_cmdline s11-stock)
+	check "cmdline: root=/dev/sda2" bash -c "printf '%s' \"\$1\" | grep -qE '(^|[: ])root=/dev/sda2( |$)'" _ "$cl"
+	check "cmdline: c5.usbtest=1" bash -c "printf '%s' \"\$1\" | grep -qE ' c5\.usbtest=1( |$)'" _ "$cl"
+	check "cmdline: c5.nocommit=1" bash -c "printf '%s' \"\$1\" | grep -qE ' c5\.nocommit=1( |$)'" _ "$cl"
+	check "stick: ATTEMPTED marker" bash -c "mdir -b -i '$stick@@1M' ::opencreator-os-test/ | grep -q ATTEMPTED"
+	check "stick: wifi.conf from usershare" bash -c "mtype -i '$stick@@1M' ::opencreator-os-test/wifi.conf | grep -q '^SSID='"
+	check "stick: hook.log says payload verified" bash -c "mtype -i '$stick@@1M' ::opencreator-os-test/hook.log | grep -q 'payload verified'"
+	sum0=$(sha256sum < "$DISK")
+
+	st=$RUN/s11-openwrt.steps
+	cat > "$st" <<'EOF'
+shell 400
+run 400 report i=0; until logread | grep -q 'c5-usbtest: report written'; do i=$((i+1)); [ $i -lt 200 ] || break; sleep 2; done; logread | grep 'c5-usbtest'
+run 30 cmdline cat /proc/cmdline
+run 30 mounts cat /proc/mounts
+run 30 rominfo grep ' /rom ' /proc/self/mountinfo; cat /sys/class/block/sda2/dev
+send sync; poweroff
+wait-exit 240
+EOF
+	if [ -n "$cl" ]; then
+		boot s11-openwrt "$DISK" "$cl" "$st" "$stick"
+	else
+		fatal "no chainload command line; OpenWrt boot skipped"
+	fi
+	sum1=$(sha256sum < "$DISK")
+	check "eMMC image byte-identical across the OpenWrt test boot (whole image sha256)" is_eq "$sum1" "$sum0"
+	check "c5-usbtest reported and unmounted the stick" res_has s11-openwrt report 'report written; stick unmounted'
+	check "/data is userdata, read-only" res_has s11-openwrt mounts '^/dev/mmcblk0p7 /data ext4 ro[, ]'
+	summary=$(stick_test_cat "$stick" openwrt/summary.txt)
+	printf '%s\n' "$summary" > "$RUN/summary.txt"
+	check "summary.txt ends with DONE" is_eq "$(printf '%s\n' "$summary" | tail -n 1)" DONE
+	for r in root overlay emmc data wifi-conf ipv4 ssh fpu; do
+		check "summary: PASS $r" bash -c "printf '%s\n' \"\$1\" | grep -qE '^PASS +$r '" _ "$summary"
+	done
+	say "  info: summary FAIL lines (expected in QEMU: no X2600 UARTs, GPIO, watchdog, Wi-Fi):$(printf '%s\n' "$summary" | awk '$1 == "FAIL" { printf " %s", $2 }')"
+	check "report has early/ and final/ snapshots" bash -c "mdir -b -i '$stick@@1M' ::opencreator-os-test/openwrt/ | grep -q early && mdir -b -i '$stick@@1M' ::opencreator-os-test/openwrt/ | grep -q final"
+
+	st=$RUN/s11-again.steps
+	steps_stock "$st"
+	boot s11-again "$DISK" "$(spl_root "$DISK")" "$st" "$stick"
+	check "second boot: hook.log says already attempted" bash -c "mtype -i '$stick@@1M' ::opencreator-os-test/hook.log | grep -q 'already attempted'"
+	check "second boot: stock continued, no chainload" is_eq "$(boot_outcome s11-again)" poweroff
+
+	local bad=$RUN/stick-s11-bad.img
+	make_test_stick "$bad" corrupt || { fatal "make-test-stick.sh failed (corrupt stick)"; return 0; }
+	st=$RUN/s11-bad.steps
+	steps_stock "$st"
+	boot s11-bad "$DISK" "$(spl_root "$DISK")" "$st" "$bad"
+	check "corrupt kernel.uimage: payload checksum mismatch" log_has s11-bad 'usbtest: payload checksum mismatch .*kernel\.uimage'
+	check "corrupt kernel.uimage: stock continued, no chainload" is_eq "$(boot_outcome s11-bad)" poweroff
+	check "corrupt kernel.uimage: no ATTEMPTED marker" bash -c "! mdir -b -i '$bad@@1M' ::opencreator-os-test/ | grep -q ATTEMPTED"
+
+	# Stock's own boot fscks and mounts usershare/userdata read-write, which
+	# updates their superblocks (mount count/time) on the printer too, so
+	# across stock boots those two are compared by content.
+	img_regions "$DISK" > "$RUN/regions-2.txt"
+	r0=$(grep -vE '^p[67] ' "$RUN/regions-0.txt") r2=$(grep -vE '^p[67] ' "$RUN/regions-2.txt")
+	check "whole flow: GPT, p1-p5 and backup GPT byte-identical" is_eq "$r2" "$r0"
+	fs_tree "$DISK" 6 "$RUN/tree2-usershare"
+	fs_tree "$DISK" 7 "$RUN/tree2-userdata"
+	check "whole flow: usershare files unchanged" diff -r --no-dereference "$RUN/tree0-usershare" "$RUN/tree2-usershare"
+	check "whole flow: userdata files unchanged" diff -r --no-dereference "$RUN/tree0-userdata" "$RUN/tree2-userdata"
+	r1=$(diff "$RUN/regions-0.txt" "$RUN/regions-2.txt" | sed -n 's/^> \(p[67]\) .*/\1/p' | tr '\n' ' ')
+	say "  info: raw bytes changed by stock's own fsck/mount: ${r1:-none}"
+}
+
+ALL_SCENARIOS="S1 S2 S3 S4 S5 S6 S7 S8 S9 S10 S11"

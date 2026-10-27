@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # opencreator-os QEMU system tests (WSL/Linux, no root needed).
 #
-#   test/qemu/run.sh [SCENARIO...]     default: all (S1..S10)
+#   test/qemu/run.sh [SCENARIO...]     default: all (S1..S11)
 #
 # Boots the real OpenWrt root.squashfs and the stock 2.0.0 userspace on an
 # emulated eMMC with the printer's GPT, emulates the SPL's slot choice, and
@@ -11,6 +11,7 @@
 #
 # Environment: QWORK, OWRT_BIN, QEMU_REFRESH_ROOTFS (default 1), QEMU_CPU,
 # QEMU_BOOT_TIMEOUT, KEEP_RUNS (default 3) - see lib/env.sh and the README.
+export PYTHONDONTWRITEBYTECODE=1
 set -uo pipefail
 
 # shellcheck source=lib/harness.sh

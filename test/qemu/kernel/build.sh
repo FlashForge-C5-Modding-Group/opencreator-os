@@ -61,7 +61,8 @@ done < "$FRAG"
 
 echo "kernel: building Linux $KVER with ${CC_PREFIX}gcc"
 "${KMAKE[@]}" vmlinux
-rm -f "$QWORK/vmlinux-$KVER"-*	# kernels of older fragment/script versions
 cp "$OBJ/vmlinux" "$VMLINUX.tmp"
 mv "$VMLINUX.tmp" "$VMLINUX"
+# kernels of older fragment/script versions
+find "$QWORK" -maxdepth 1 -name "vmlinux-$KVER-*" ! -path "$VMLINUX" -delete
 echo "kernel: $VMLINUX"
