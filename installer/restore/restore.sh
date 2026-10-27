@@ -36,9 +36,17 @@ done
 . "$SELF_DIR/lib.sh"
 STICK=$SELF_DIR
 FBDIR=$SELF_DIR/fb
+C5_FB=${C5_FB:-/dev/fb0}
 LOG_STICK_NAME=result.log
 LOG_DATA_NAME=restore.log
 CONF=$SELF_DIR/restore.conf
+
+# show NAME: put FBDIR/NAME.raw on the panel (stock does the same with cat).
+show() {
+	[ -f "$FBDIR/$1.raw" ] && [ -e "$C5_FB" ] || return 0
+	cat "$FBDIR/$1.raw" > "$C5_FB" 2>/dev/null
+	return 0
+}
 
 finish() {  # finish SCREEN EXITCODE
 	show "$1"

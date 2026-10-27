@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Assemble the opencreator-os USB-stick payload from a build directory.
 #
-#   tools/make-install-stick.sh [--flip | --chainload] [--authorized-keys FILE] VERSION_DIR OUTDIR
+#   tools/make-install-stick.sh [--flip | --chainload] [--authorized-keys FILE] [--app FILE] VERSION_DIR OUTDIR
 #
 # VERSION_DIR  build output, e.g. /mnt/f/creator5-dev/opencreator-os-builds/<ver>,
 #              holding opencreator-os-x2600-generic-flashforge_creator5pro-*
@@ -10,17 +10,20 @@
 # --chainload  add opencreator-os/CHAINLOAD: after the write, test-boot
 #              OpenWrt from RAM (boot flag stays on stock)
 # --authorized-keys FILE  ship FILE as the SSH keys for OpenWrt's root
+# --app FILE   ship the os-installer touchscreen app (os-installer/build/mips32/os-installer);
+#              without it the stick runs headless
 #
-# chainload.ko comes from chainload/out/ of this repo (chainload/build.sh).
+# chainload.ko comes from chainload/out/ of this repo (chainload/build.sh),
+# sfdisk and partx from installer/tools/out/ (installer/tools/build.sh).
 # FLIP, CHAINLOAD and authorized_keys are left out of the checksum lists so
 # they can be added or edited on the stick later.
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 PREFIX=opencreator-os-x2600-generic-flashforge_creator5pro-squashfs
-FLIP=0 CHAIN=0 KEYS=
+FLIP=0 CHAIN=0 KEYS='' APP=''
 
-usage() { sed -n '2,16s/^# \{0,1\}//p' "$0"; }
+usage() { sed -n '2,19s/^# \{0,1\}//p' "$0"; }
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -29,6 +32,11 @@ while [ $# -gt 0 ]; do
 	--authorized-keys)
 		[ $# -ge 2 ] || { usage >&2; exit 2; }
 		KEYS=$2
+		shift
+		;;
+	--app)
+		[ $# -ge 2 ] || { usage >&2; exit 2; }
+		APP=$2
 		shift
 		;;
 	-h | --help) usage; exit 0 ;;
@@ -48,13 +56,12 @@ for a in kernel.uimage root.squashfs sysupgrade.tar; do
 	[ -s "$VDIR/$PREFIX-$a" ] || die "missing $VDIR/$PREFIX-$a"
 done
 for f in installer/runFirmwareExe.sh installer/opencreator-os/install.sh installer/opencreator-os/lib.sh \
-	installer/opencreator-os/switch-to-openwrt.sh chainload/out/chainload.ko chainload/c5-chainload.sh; do
+	installer/opencreator-os/switch-to-openwrt.sh chainload/out/chainload.ko chainload/c5-chainload.sh \
+	installer/tools/out/sfdisk installer/tools/out/partx; do
 	[ -s "$REPO/$f" ] || die "missing $REPO/$f"
 done
-for s in installing written 'done' failed chainload chainload-failed; do
-	[ -s "$REPO/installer/fb/$s.raw" ] || die "missing screen image installer/fb/$s.raw"
-done
 [ -z "$KEYS" ] || [ -s "$KEYS" ] || die "authorized keys file $KEYS is empty or missing"
+[ -z "$APP" ] || [ -s "$APP" ] || die "app $APP is empty or missing"
 if [ -e "$OUT" ] && [ -n "$(ls -A "$OUT")" ]; then
 	die "$OUT exists and is not empty"
 fi
@@ -80,11 +87,12 @@ if [ "$KSZ" -le 64 ] || [ "$KPAY" -gt "$CL_LIMIT" ]; then
 fi
 echo "kernel.uimage payload $KPAY of $CL_LIMIT bytes (chainload limit)"
 
-mkdir -p "$OUT/opencreator-os/fb" "$OUT/chainload"
+mkdir -p "$OUT/opencreator-os/bin" "$OUT/chainload"
 install -m 0755 "$REPO/installer/runFirmwareExe.sh" "$OUT/"
 install -m 0755 "$REPO/installer/opencreator-os/install.sh" "$REPO/installer/opencreator-os/switch-to-openwrt.sh" "$OUT/opencreator-os/"
 install -m 0644 "$REPO/installer/opencreator-os/lib.sh" "$OUT/opencreator-os/"
-install -m 0644 "$REPO"/installer/fb/*.raw "$OUT/opencreator-os/fb/"
+install -m 0755 "$REPO/installer/tools/out/sfdisk" "$REPO/installer/tools/out/partx" "$OUT/opencreator-os/bin/"
+[ -z "$APP" ] || install -m 0755 "$APP" "$OUT/opencreator-os/os-installer"
 for a in kernel.uimage root.squashfs sysupgrade.tar; do
 	install -m 0644 "$VDIR/$PREFIX-$a" "$OUT/$a"
 done

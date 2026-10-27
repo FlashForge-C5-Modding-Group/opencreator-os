@@ -8,29 +8,34 @@
 # the stock printer's.
 #   C5_DISK        eMMC disk; partitions are ${C5_DISK}pN      (/dev/mmcblk0)
 #   C5_FDISK       fdisk binary, run as "$C5_FDISK -l $C5_DISK" (fdisk)
+#   C5_SFDISK      util-linux sfdisk for GPT dump/write       (sfdisk; install.sh: the stick's bin/sfdisk)
+#   C5_PARTX       util-linux partx, tells the kernel (BLKPG) (install.sh: the stick's bin/partx)
 #   C5_SYSBLOCK    sysfs block class directory                (/sys/class/block)
 #   C5_CMDLINE     kernel command line file                   (/proc/cmdline)
 #   C5_MOUNTS      mount table                                (/proc/mounts)
 #   C5_DATA        stock userdata mount point                 (/usr/data)
-#   C5_FB          framebuffer device                         (/dev/fb0)
 #   C5_DROP_CACHES page cache control file                    (/proc/sys/vm/drop_caches)
 #   C5_REBOOT      reboot command                             (reboot)
 #   C5_UNAME_R     kernel release                             ($(uname -r))
 #   C5_SUM         force md5sum or sha256sum                  (sha256sum if present)
-# Callers set STICK (directory for the stick-side log) and FBDIR (screen
-# images) as needed; LOG_STICK_NAME / LOG_DATA_NAME name the log files on
-# the stick and in $OCDIR.
+#   C5_C5OS_MIB    size of the c5os partition in MiB          (4096)
+# Callers set STICK (directory for the stick-side log) as needed;
+# LOG_STICK_NAME / LOG_DATA_NAME name the log files on the stick and in
+# $OCDIR. UI=1 sends screen requests to the os-installer app on stdout and
+# reads its answers on stdin (see the ui_* helpers).
 
 C5_DISK=${C5_DISK:-/dev/mmcblk0}
 C5_FDISK=${C5_FDISK:-fdisk}
+C5_SFDISK=${C5_SFDISK:-sfdisk}
 C5_SYSBLOCK=${C5_SYSBLOCK:-/sys/class/block}
 C5_CMDLINE=${C5_CMDLINE:-/proc/cmdline}
 C5_MOUNTS=${C5_MOUNTS:-/proc/mounts}
 C5_DATA=${C5_DATA:-/usr/data}
-C5_FB=${C5_FB:-/dev/fb0}
 C5_DROP_CACHES=${C5_DROP_CACHES:-/proc/sys/vm/drop_caches}
 C5_REBOOT=${C5_REBOOT:-reboot}
 C5_UNAME_R=${C5_UNAME_R:-$(uname -r)}
+C5_C5OS_MIB=${C5_C5OS_MIB:-4096}
+UI=${UI:-0}
 
 OCDIR=$C5_DATA/opencreator-os
 UIMAGE_MAGIC=27051956
@@ -38,16 +43,17 @@ SQUASHFS_MAGIC=hsqs
 LOG_STICK_NAME=${LOG_STICK_NAME:-opencreator-os-install.log}
 LOG_DATA_NAME=${LOG_DATA_NAME:-install.log}
 
-# --- logging and screen ------------------------------------------------------
+# --- logging -----------------------------------------------------------------
 
+# NO_DATA_LOG=1 while userdata is unmounted (its mount point must stay empty)
 log() {
 	log_line="$(date '+%F %T') $*"
-	echo "$*"
+	printf '%s\n' "$*"
 	if [ -n "${STICK:-}" ] && [ -d "$STICK" ]; then
-		echo "$log_line" >> "$STICK/$LOG_STICK_NAME" 2>/dev/null
+		printf '%s\n' "$log_line" >> "$STICK/$LOG_STICK_NAME" 2>/dev/null
 	fi
-	if mkdir -p "$OCDIR" 2>/dev/null; then
-		echo "$log_line" >> "$OCDIR/$LOG_DATA_NAME" 2>/dev/null
+	if [ "${NO_DATA_LOG:-0}" != 1 ] && mkdir -p "$OCDIR" 2>/dev/null; then
+		printf '%s\n' "$log_line" >> "$OCDIR/$LOG_DATA_NAME" 2>/dev/null
 	fi
 	return 0
 }
@@ -57,11 +63,96 @@ die() {
 	return 1
 }
 
-# show NAME: put FBDIR/NAME.raw on the panel (stock does the same with cat).
-show() {
-	[ -n "${FBDIR:-}" ] && [ -f "$FBDIR/$1.raw" ] && [ -e "$C5_FB" ] || return 0
-	cat "$FBDIR/$1.raw" > "$C5_FB" 2>/dev/null
-	return 0
+# --- os-installer screen protocol ---------------------------------------------
+# With UI=1 stdout goes to the os-installer app. One request per line; "\n"
+# (two characters) in TEXT breaks lines, the first line is the title:
+#   INFO ID TEXT                    status screen
+#   PROGRESS N TOTAL                progress bar under the current INFO
+#   CONFIRM ID DELAY TEXT|OK|CANCEL OK enabled DELAY seconds after arrival
+#   MENU ID TEXT|ITEM|ITEM...       "-ITEM" is shown disabled
+#   BLOCK ID TEXT                   no buttons; the user power-cycles
+# The app answers "ANSWER ID ok|cancel|N" on stdin; EOF means cancel. Every
+# other output line (log lines) only lands in the app's log viewer.
+
+ui_emit() { [ "$UI" = 1 ] && printf '%s\n' "$*"; return 0; }
+
+ui_info() {  # ui_info ID TEXT
+	ui_emit "INFO $1 $2"
+	log "screen $1: $2"
+}
+
+ui_progress() { ui_emit "PROGRESS $1 $2"; }
+
+# ui_block ID TEXT: show TEXT without buttons and stop. With the app the
+# installer waits for it to go away (the user power-cycles); exit 1 lets
+# the stock hook boot on.
+ui_block() {
+	if [ "${CHECK:-0}" = 1 ]; then
+		log "check: would block at $1: $2"
+		exit 1
+	fi
+	ui_emit "BLOCK $1 $2"
+	log "install: BLOCKED at $1: $2"
+	sync
+	[ "$UI" = 1 ] && cat > /dev/null
+	exit 1
+}
+
+# ui_answer ID -> the app's answer for ID; "cancel" on EOF. Other lines are
+# logged (to stderr: callers capture stdout).
+ui_answer() {
+	while IFS= read -r ua_line; do
+		case "$ua_line" in
+		"ANSWER $1 "*) printf '%s\n' "${ua_line#"ANSWER $1 "}"; return 0 ;;
+		*) log "ui: ignored '$ua_line'" >&2 ;;
+		esac
+	done
+	echo cancel
+}
+
+# ui_confirm ID DELAY TEXT OK CANCEL NONUI [PROMPT] -> 0 ok, 1 cancel. An ok
+# that arrives before DELAY seconds passed is treated as cancel. Without the
+# app NONUI decides: ok, cancel, or ask (PROMPT + "Type YES" on a terminal).
+ui_confirm() {
+	if [ "$UI" = 1 ]; then
+		uc_t0=$(date +%s)
+		ui_emit "CONFIRM $1 $2 $3|$4|$5"
+		uc_v=$(ui_answer "$1")
+		uc_dt=$(($(date +%s) - uc_t0))
+		log "confirm $1: $uc_v"
+		[ "$uc_v" = ok ] || return 1
+		if [ "$uc_dt" -lt "$2" ]; then
+			log "confirm $1: ok arrived after ${uc_dt}s, before the $2 s delay; treating as cancel"
+			return 1
+		fi
+		return 0
+	fi
+	case "$6" in
+	ok) return 0 ;;
+	cancel) return 1 ;;
+	esac
+	# the stock hook may run with the serial console as stdin: never ask there
+	{ [ "${HOOK:-0}" != 1 ] && [ -t 0 ]; } || abort "confirm $1: no display and no --yes"
+	printf '%s Type YES: ' "${7:-$3}"
+	read -r uc_v
+	[ "$uc_v" = YES ]
+}
+
+# ui_menu ID TEXT ITEM... -> UI_CHOICE = chosen 1-based index, 0 for cancel
+# (a variable: the request itself goes to stdout). Without the app: 1 for
+# ACTION=install, 2 for ACTION=swap.
+ui_menu() {
+	if [ "$UI" != 1 ]; then
+		case "${ACTION:-install}" in swap) UI_CHOICE=2 ;; *) UI_CHOICE=1 ;; esac
+		return 0
+	fi
+	um_id=$1 um_line="MENU $1 $2"
+	shift 2
+	for um_i in "$@"; do um_line="$um_line|$um_i"; done
+	ui_emit "$um_line"
+	um_v=$(ui_answer "$um_id")
+	log "menu $um_id: $um_v"
+	case "$um_v" in '' | *[!0-9]*) UI_CHOICE=0 ;; *) UI_CHOICE=$um_v ;; esac
 }
 
 drop_caches() {
@@ -204,6 +295,13 @@ free_bytes() {
 	fb_k=$(df -k "$1" 2>/dev/null | awk 'NR > 1 && NF >= 4 && $(NF-2) ~ /^[0-9]+$/ { a = $(NF-2) } END { print a }')
 	case "$fb_k" in '' | *[!0-9]*) return 1 ;; esac
 	echo $((fb_k * 1024))
+}
+
+# used_bytes DIR -> used bytes on the filesystem holding DIR
+used_bytes() {
+	ub_k=$(df -k "$1" 2>/dev/null | awk 'NR > 1 && NF >= 4 && $(NF-3) ~ /^[0-9]+$/ { u = $(NF-3) } END { print u }')
+	case "$ub_k" in '' | *[!0-9]*) return 1 ;; esac
+	echo $((ub_k * 1024))
 }
 
 # shq STRING -> STRING single-quoted for sh
