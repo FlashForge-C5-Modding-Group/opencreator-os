@@ -1,0 +1,130 @@
+#!/bin/sh
+# shellcheck disable=SC1091,SC3043
+#
+# c5-usbtest: report of a zero-write USB test boot (c5.usbtest=1, root on the
+# test stick's second partition; see docs/usb-test.md). Run in the background
+# by /etc/init.d/c5-usbtest. Writes to opencreator-os-test/openwrt/ on the
+# stick's FAT partition:
+#   early/      system state right after boot
+#   final/      the same once Wi-Fi has an address or after C5_USBTEST_WAIT s
+#   summary.txt one PASS/FAIL/INFO line per check, then DONE
+# and unmounts the stick, so power can be cut once summary.txt ends in DONE.
+# Nothing here writes to the eMMC; the system keeps running afterwards
+# (SSH as root works if Wi-Fi came up).
+
+. /lib/c5/slot.sh
+c5_usbtest || exit 0
+
+WAIT=${C5_USBTEST_WAIT:-180}
+MNT=/tmp/c5stick
+FAT=$(c5_usbtest_fat) || { logger -t c5-usbtest "root $(c5_root_dev) is not /dev/sdX2"; exit 1; }
+mkdir -p "$MNT"
+mount -t vfat -o rw,noatime,sync "$FAT" "$MNT" || { logger -t c5-usbtest "cannot mount $FAT"; exit 1; }
+OUT=$MNT/opencreator-os-test/openwrt
+rm -rf "$OUT"
+mkdir -p "$OUT"
+
+# collect DIR: plain-text snapshot of the system
+collect() {
+	local d="$1" f
+	mkdir -p "$d"
+	uname -a > "$d/uname.txt" 2>&1
+	cat /proc/cmdline > "$d/cmdline.txt"
+	cat /proc/version > "$d/version.txt"
+	cat /proc/cpuinfo > "$d/cpuinfo.txt"
+	cat /proc/meminfo > "$d/meminfo.txt"
+	cat /proc/iomem > "$d/iomem.txt"
+	cat /proc/interrupts > "$d/interrupts.txt"
+	cat /proc/mounts > "$d/mounts.txt"
+	cat /proc/partitions > "$d/partitions.txt"
+	partx -s -g -o NR,START,SECTORS,NAME "$C5_DISK" > "$d/partx.txt" 2>&1
+	df -k > "$d/df.txt" 2>&1
+	lsmod > "$d/lsmod.txt" 2>&1
+	dmesg > "$d/dmesg.txt" 2>&1
+	logread > "$d/logread.txt" 2>&1
+	ps w > "$d/ps.txt" 2>&1
+	ls -l /dev > "$d/dev.txt" 2>&1
+	for f in /sys/class/tty/ttyS* /sys/class/tty/ttyUSB* /sys/class/tty/ttyACM*; do
+		[ -e "$f" ] || continue
+		echo "${f##*/} $(readlink "$f/device/driver" 2>/dev/null)"
+	done > "$d/tty.txt"
+	for f in /sys/bus/usb/devices/*; do
+		[ -f "$f/idVendor" ] || continue
+		echo "${f##*/} $(cat "$f/idVendor"):$(cat "$f/idProduct") $(cat "$f/product" 2>/dev/null)"
+	done > "$d/usb.txt"
+	for f in /sys/class/gpio/gpiochip*; do
+		echo "${f##*/} base=$(cat "$f/base") ngpio=$(cat "$f/ngpio") label=$(cat "$f/label")"
+	done > "$d/gpio.txt" 2>&1
+	ip addr > "$d/ip-addr.txt" 2>&1
+	ip route > "$d/ip-route.txt" 2>&1
+	iwinfo > "$d/iwinfo.txt" 2>&1
+	ls -l /sys/class/ieee80211 /sys/class/net > "$d/net-classes.txt" 2>&1
+	# keys are not copied
+	uci -q show wireless 2>&1 | sed "s/\(\.key=\).*/\1(hidden)/" > "$d/uci-wireless.txt"
+	uci -q show network > "$d/uci-network.txt" 2>&1
+	uci -q show fstab > "$d/uci-fstab.txt" 2>&1
+	c5-slot status > "$d/c5-slot-status.txt" 2>&1
+	sync
+}
+
+ipv4() { ip -o -4 addr show scope global 2>/dev/null | awk '$2 != "lo" { print $2, $4 }'; }
+
+collect "$OUT/early"
+
+t=0
+while [ -z "$(ipv4)" ] && [ "$t" -lt "$WAIT" ]; do
+	sleep 5
+	t=$((t + 5))
+done
+
+# PC11 heartbeat: c5-heartbeat toggles it once a second
+hb=''
+i=0
+while [ "$i" -lt 8 ]; do
+	hb="$hb$(cat /sys/class/gpio/gpio75/value 2>/dev/null || echo x)"
+	sleep 0.5
+	i=$((i + 1))
+done
+
+collect "$OUT/final"
+
+S=$OUT/summary.txt
+res() { printf '%-5s %-10s %s\n' "$1" "$2" "$3" >> "$S"; }
+check() { # NAME DETAIL CONDITION...
+	local n="$1" d="$2"
+	shift 2
+	if "$@" > /dev/null 2>&1; then res PASS "$n" "$d"; else res FAIL "$n" "$d"; fi
+}
+has_part() { partx -s -g -o NAME "$C5_DISK" 2>/dev/null | grep -qx "$1"; }
+emmc_ok() { for p in kernel rootfs kernel2 rootfs2 ota usershare userdata; do has_part "$p" || return 1; done; }
+uarts_ok() { for u in 2 4 5 7; do [ -c "/dev/ttyS$u" ] || return 1; done; }
+mounted_on() { awk -v d="$1" -v m="$2" '$1 == d && $2 == m { f = 1 } END { exit !f }' /proc/mounts; }
+data_ro() { awk '$2 == "/data" && $4 ~ /(^|,)ro(,|$)/ { f = 1 } END { exit !f }' /proc/mounts; }
+hb_toggles() { case "$hb" in *0*1* | *1*0*) return 0 ;; esac; return 1; }
+wifi_usb() { grep -q ' 0bda:c811' "$OUT/final/usb.txt"; }
+wifi_if() { ls /sys/class/ieee80211/* > /dev/null 2>&1; }
+ssh_up() { awk '$2 ~ /:0016$/ && $4 == "0A" { f = 1 } END { exit !f }' /proc/net/tcp /proc/net/tcp6 2>/dev/null; }
+
+: > "$S"
+res INFO version "$(. /etc/openwrt_release; echo "$DISTRIB_ID $DISTRIB_RELEASE") kernel $(uname -r)"
+res INFO cmdline "$(cat /proc/cmdline)"
+res INFO cpus "online $(cat /sys/devices/system/cpu/online)"
+res INFO flag "'$(c5_flag_read)' (read only; the test never writes it)"
+check root "/dev/sda2 squashfs at /rom" mounted_on "$(c5_root_dev)" /rom
+# shellcheck disable=SC2016 # awk program
+check overlay "/ is overlayfs" awk '$2 == "/" && $3 == "overlay" { f = 1 } END { exit !f }' /proc/mounts
+check emmc "GPT names on $C5_DISK" emmc_ok
+check data "userdata at /data, read-only" data_ro
+check uarts "ttyS2 ttyS4 ttyS5 ttyS7" uarts_ok
+check heartbeat "gpio75 samples $hb" hb_toggles
+check watchdog "/dev/watchdog" test -c /dev/watchdog
+check fpu "awk 1.5*2" test "$(awk 'BEGIN { print 1.5 * 2 }')" = 3
+check wifi-usb "RTL8821CU 0bda:c811 enumerated" wifi_usb
+check wifi-phy "ieee80211 phy present" wifi_if
+check wifi-conf "credentials imported" test -s /etc/c5/wifi.conf
+check ipv4 "$(ipv4 | tr '\n' ' ')(waited ${t}s)" test -n "$(ipv4)"
+check ssh "dropbear on TCP 22" ssh_up
+echo DONE >> "$S"
+sync
+cd /
+umount "$MNT" && logger -t c5-usbtest "report written; stick unmounted, power can be cut"

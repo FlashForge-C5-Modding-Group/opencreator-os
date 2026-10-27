@@ -109,8 +109,10 @@ c5_drop_caches() {
 }
 
 # $1 = 1|2 ; whole-sector write, NUL padded, read back.
+# Refused on a USB test boot (c5_usbtest).
 c5_flag_write() {
 	local s dev
+	c5_usbtest && return 1
 	dev=$(c5_part_dev ota) || return 1
 	case "$1" in
 		1) s="ota:kernel" ;;
@@ -123,8 +125,10 @@ c5_flag_write() {
 }
 
 # ota device if it is large enough to hold the bootlog area, else return 1.
+# Not used on a USB test boot (c5_usbtest): bootlog lines go to kmsg only.
 c5_bootlog_dev() {
 	local dev bytes
+	c5_usbtest && return 1
 	dev=$(c5_part_dev ota) || return 1
 	bytes=$(c5_part_bytes ota) || return 1
 	[ "$bytes" -ge $(((C5_BOOTLOG_SECTOR + C5_BOOTLOG_SECTORS) * 512)) ] || return 1
@@ -216,6 +220,7 @@ c5_stock_invalid() {
 # $* = reason; written with fsync and read back.
 c5_stock_invalid_set() {
 	local dev
+	c5_usbtest && return 1
 	dev=$(c5_stockinv_dev) || return 1
 	printf '%s %s' "$C5_STOCKINV_MAGIC" "$*" | head -c 500 |
 		dd of="$dev" bs=512 seek="$C5_STOCKINV_SECTOR" count=1 conv=sync,notrunc,fsync 2>/dev/null || return 1
@@ -225,6 +230,7 @@ c5_stock_invalid_set() {
 
 c5_stock_invalid_clear() {
 	local dev
+	c5_usbtest && return 1
 	dev=$(c5_stockinv_dev) || return 1
 	dd if=/dev/zero of="$dev" bs=512 seek="$C5_STOCKINV_SECTOR" count=1 conv=notrunc,fsync 2>/dev/null || return 1
 	c5_drop_caches
@@ -235,6 +241,23 @@ c5_stock_invalid_clear() {
 # (c5-chainload.sh adds c5.nocommit=1): never point the flag at this slot.
 c5_nocommit() {
 	tr -s ' \t' '\n' < "$C5_CMDLINE_FILE" 2>/dev/null | grep -qx 'c5\.nocommit=1'
+}
+
+# Zero-write USB test boot (c5.usbtest=1, added by the test stick's hook):
+# root is the stick's second partition and nothing may be written to the
+# eMMC, so the boot flag, bootlog and stock-invalid writers refuse.
+c5_usbtest() {
+	tr -s ' \t' '\n' < "$C5_CMDLINE_FILE" 2>/dev/null | grep -qx 'c5\.usbtest=1'
+}
+
+# FAT partition of the test stick (root=/dev/sdX2 -> /dev/sdX1).
+c5_usbtest_fat() {
+	local r
+	r=$(c5_root_dev)
+	case "$r" in
+		/dev/sd[a-z]2) echo "${r%2}1" ;;
+		*) return 1 ;;
+	esac
 }
 
 # Is there a reason the flag must not point at stock (the other slot)?

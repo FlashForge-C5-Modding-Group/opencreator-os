@@ -8,15 +8,42 @@
 #    and /etc/init.d/done deletes;
 #  - opencreator-os/wifi.conf and opencreator-os/authorized_keys (written by
 #    the stock-side installer) when the overlay has no copy yet.
+# On a USB test boot (c5.usbtest=1) userdata is not mounted at all: the two
+# files come from opencreator-os-test/ on the test stick's FAT partition.
+
+# $1 = directory holding wifi.conf / authorized_keys
+c5_import_creds() {
+	mkdir -p /etc/c5 /etc/dropbear
+	if [ -s "$1/wifi.conf" ] && [ ! -s /etc/c5/wifi.conf ]; then
+		cp "$1/wifi.conf" /etc/c5/wifi.conf && chmod 600 /etc/c5/wifi.conf
+	fi
+	if [ -s "$1/authorized_keys" ] && [ ! -s /etc/dropbear/authorized_keys ]; then
+		cp "$1/authorized_keys" /etc/dropbear/authorized_keys &&
+			chmod 600 /etc/dropbear/authorized_keys
+	fi
+}
 
 c5_move_config() {
 	. /lib/c5/slot.sh
 	local dev mnt=/tmp/c5data src
+	mkdir -p "$mnt"
+	if c5_usbtest; then
+		dev=$(c5_usbtest_fat) || {
+			c5_bootlog "move_config: USB test, but root $(c5_root_dev) is not /dev/sdX2"
+			return 0
+		}
+		mount -t vfat -o ro "$dev" "$mnt" 2>/dev/null || {
+			c5_bootlog "move_config: USB test, mounting $dev failed"
+			return 0
+		}
+		c5_import_creds "$mnt/opencreator-os-test"
+		umount "$mnt"
+		return 0
+	fi
 	dev=$(c5_part_dev userdata) || {
 		c5_bootlog "move_config: no userdata partition"
 		return 0
 	}
-	mkdir -p "$mnt"
 	mount -t ext4 -o rw,noatime "$dev" "$mnt" 2>/dev/null || {
 		c5_bootlog "move_config: userdata mount failed"
 		return 0
@@ -29,14 +56,7 @@ c5_move_config() {
 			c5_bootlog "move_config: moving sysupgrade.tgz failed"
 		fi
 	fi
-	mkdir -p /etc/c5 /etc/dropbear
-	if [ -s "$src/wifi.conf" ] && [ ! -s /etc/c5/wifi.conf ]; then
-		cp "$src/wifi.conf" /etc/c5/wifi.conf && chmod 600 /etc/c5/wifi.conf
-	fi
-	if [ -s "$src/authorized_keys" ] && [ ! -s /etc/dropbear/authorized_keys ]; then
-		cp "$src/authorized_keys" /etc/dropbear/authorized_keys &&
-			chmod 600 /etc/dropbear/authorized_keys
-	fi
+	c5_import_creds "$src"
 	sync
 	umount "$mnt"
 }

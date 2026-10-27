@@ -34,6 +34,9 @@
 . /lib/c5/slot.sh
 . /lib/c5/restore.sh
 
+# The USB test stick is the root device here, not a recovery stick.
+c5_usbtest && exit 0
+
 DEVS=${C5_REC_DEVS:-/dev/sd[a-z]1 /dev/sd[a-z]}
 MNT=${C5_REC_MNT:-/tmp/c5-recovery}
 WAIT=${C5_REC_WAIT:-15}

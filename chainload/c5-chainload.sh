@@ -27,6 +27,8 @@
 #
 # Files: chainload.ko and kernel.uimage in the same directory as this script
 # (normally /usr/data/opencreator-os/chainload/). BusyBox ash.
+# C5CL_EXTRA: words appended to the new command line (e.g. c5.usbtest=1 for
+# the zero-write USB test stick); only c5.* words are accepted.
 # Test overrides: C5CL_CMDLINE, C5CL_IOMEM, C5CL_KALLSYMS name the files
 # read instead of /proc/cmdline, /proc/iomem, /proc/kallsyms; C5CL_DISK
 # (/dev/mmcblk0), C5CL_FDISK (fdisk), C5CL_DEVROOT (prefix for reading
@@ -84,6 +86,7 @@ build_cmdline() {
 	case " $cl " in *" rootwait "*) ;; *) cl="$cl rootwait" ;; esac
 	case " $cl " in *" ieee754=relaxed "*) ;; *) cl="$cl ieee754=relaxed" ;; esac
 	[ "$commit" = 1 ] || cl="$cl c5.nocommit=1"
+	[ -z "${C5CL_EXTRA:-}" ] || cl="$cl $C5CL_EXTRA"
 	echo "$cl"
 }
 
@@ -155,6 +158,12 @@ running_root() { sed -n 's/.*[[:space:]]root=\([^[:space:]]*\).*/\1/p; s/^root=\
 compute() {
 	rootdev=$1
 	case "$rootdev" in /dev/?*) ;; *) die "ROOTDEV must be a /dev path, got '$rootdev'" ;; esac
+	set -f
+	# shellcheck disable=SC2086 # split into words
+	for w in ${C5CL_EXTRA:-}; do
+		case "$w" in c5.?*) ;; *) set +f; die "C5CL_EXTRA accepts only c5.* words, got '$w'" ;; esac
+	done
+	set +f
 	[ "$rootdev" != "$(running_root)" ] || die "$rootdev is the running stock root"
 	check_commit "$rootdev" "$2"
 	cmdline=$(build_cmdline "$rootdev")
@@ -272,5 +281,5 @@ go-now) go_now ;;
 unstage) staged || die "not staged"; rmmod chainload ;;
 status) cmd_status ;;
 args) shift; cmd_args "$@" ;;
-*) sed -n '2,33p' "$0"; exit 2 ;;
+*) sed -n '2,35p' "$0"; exit 2 ;;
 esac

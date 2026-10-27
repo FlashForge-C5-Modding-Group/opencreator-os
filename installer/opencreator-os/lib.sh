@@ -208,3 +208,53 @@ free_bytes() {
 
 # shq STRING -> STRING single-quoted for sh
 shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
+# --- Wi-Fi credentials from stock's wpa_supplicant.conf ----------------------
+
+# wpa_get FILE KEY -> raw value of KEY in the first network={} block
+wpa_get() {
+	tr -d '\r' < "$1" | awk -v k="$2" '
+		!inb && /^[ \t]*network[ \t]*=[ \t]*\{/ { inb = 1; next }
+		inb && /^[ \t]*\}/ { exit }
+		inb { l = $0; sub(/^[ \t]+/, "", l); sub(/[ \t]+$/, "", l)
+		      if (index(l, k "=") == 1) { print substr(l, length(k) + 2); exit } }'
+}
+
+hex_decode() {
+	printf '%s' "$1" | awk '{ h = "0123456789abcdef"; t = tolower($0); s = ""
+		for (i = 1; i < length(t); i += 2)
+			s = s sprintf("%c", (index(h, substr(t, i, 1)) - 1) * 16 + index(h, substr(t, i + 1, 1)) - 1)
+		printf "%s", s }'
+}
+
+# wpa_value RAW: "quoted" -> contents, anything else unchanged
+wpa_value() {
+	case "$1" in
+	\"*\"*) wv=${1#\"}; printf '%s' "${wv%\"*}" ;;
+	*) printf '%s' "$1" ;;
+	esac
+}
+
+# wifi_conf WPA_CONF OUT: write OUT as shell-sourceable SSID='...' PSK='...'
+# (mode 600; what OpenWrt's c5-wifi-sta reads) from the first network block.
+# An unquoted even-length hex ssid is decoded. Prints the SSID. Returns 1
+# when the block has no ssid=, 2 when OUT cannot be written.
+wifi_conf() {
+	wc_ssid_raw=$(wpa_get "$1" ssid)
+	wc_ssid=$(wpa_value "$wc_ssid_raw")
+	case "$wc_ssid_raw" in
+	\"*) ;;
+	*) if [ -n "$wc_ssid_raw" ] && ! printf '%s' "$wc_ssid_raw" | grep -q '[^0-9A-Fa-f]' &&
+		[ $((${#wc_ssid_raw} % 2)) = 0 ]; then
+			wc_ssid=$(hex_decode "$wc_ssid_raw")
+		fi ;;
+	esac
+	[ -n "$wc_ssid" ] || return 1
+	wc_psk=$(wpa_value "$(wpa_get "$1" psk)")
+	(
+		umask 077
+		{ echo "SSID=$(shq "$wc_ssid")"; echo "PSK=$(shq "$wc_psk")"; } > "$2.new" &&
+			chmod 600 "$2.new" 2>/dev/null; mv -f "$2.new" "$2"
+	) || return 2
+	printf '%s\n' "$wc_ssid"
+}

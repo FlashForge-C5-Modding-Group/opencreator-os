@@ -202,59 +202,20 @@ save_stock() {
 	log "stock: saved and verified ($SUM)"
 }
 
-# wpa_get FILE KEY -> raw value of KEY in the first network={} block
-wpa_get() {
-	tr -d '\r' < "$1" | awk -v k="$2" '
-		!inb && /^[ \t]*network[ \t]*=[ \t]*\{/ { inb = 1; next }
-		inb && /^[ \t]*\}/ { exit }
-		inb { l = $0; sub(/^[ \t]+/, "", l); sub(/[ \t]+$/, "", l)
-		      if (index(l, k "=") == 1) { print substr(l, length(k) + 2); exit } }'
-}
-
-hex_decode() {
-	printf '%s' "$1" | awk '{ h = "0123456789abcdef"; t = tolower($0); s = ""
-		for (i = 1; i < length(t); i += 2)
-			s = s sprintf("%c", (index(h, substr(t, i, 1)) - 1) * 16 + index(h, substr(t, i + 1, 1)) - 1)
-		printf "%s", s }'
-}
-
-# wpa_value RAW: "quoted" -> contents; even-length hex -> decoded (ssid only)
-wpa_value() {
-	case "$1" in
-	\"*\"*) wv=${1#\"}; printf '%s' "${wv%\"*}" ;;
-	*) printf '%s' "$1" ;;
-	esac
-}
-
 save_wifi() {
 	wpa=${C5_WPA:-/usr/prog/wifi/wpa_supplicant.conf}
-	if [ -f "$wpa" ]; then
-		ssid_raw=$(wpa_get "$wpa" ssid)
-		psk_raw=$(wpa_get "$wpa" psk)
-		ssid=$(wpa_value "$ssid_raw")
-		case "$ssid_raw" in
-		\"*) ;;
-		*) if [ -n "$ssid_raw" ] && ! printf '%s' "$ssid_raw" | grep -q '[^0-9A-Fa-f]' && [ $((${#ssid_raw} % 2)) = 0 ]; then
-				ssid=$(hex_decode "$ssid_raw")
-			fi ;;
-		esac
-		psk=$(wpa_value "$psk_raw")
-		if [ -n "$ssid" ]; then
-			(
-				umask 077
-				{ echo "SSID=$(shq "$ssid")"; echo "PSK=$(shq "$psk")"; } > "$OCDIR/wifi.conf.new" &&
-					chmod 600 "$OCDIR/wifi.conf.new" && mv -f "$OCDIR/wifi.conf.new" "$OCDIR/wifi.conf"
-			) || fail "cannot write $OCDIR/wifi.conf"
-			if [ -n "$psk" ]; then
-				log "wifi: saved SSID '$ssid' with its key to $OCDIR/wifi.conf"
-			else
-				log "wifi: saved SSID '$ssid' (no psk= in $wpa; open network?) to $OCDIR/wifi.conf"
-			fi
-		else
-			log "wifi: no network block with ssid= in $wpa; wifi.conf not written"
-		fi
-	else
+	if [ ! -f "$wpa" ]; then
 		log "wifi: $wpa not found; wifi.conf not written"
+	elif ssid=$(wifi_conf "$wpa" "$OCDIR/wifi.conf"); then
+		if grep -qx "PSK=''" "$OCDIR/wifi.conf"; then
+			log "wifi: saved SSID '$ssid' (no psk= in $wpa; open network?) to $OCDIR/wifi.conf"
+		else
+			log "wifi: saved SSID '$ssid' with its key to $OCDIR/wifi.conf"
+		fi
+	elif [ $? = 2 ]; then
+		fail "cannot write $OCDIR/wifi.conf"
+	else
+		log "wifi: no network block with ssid= in $wpa; wifi.conf not written"
 	fi
 	if [ -s "$STICK/opencreator-os/authorized_keys" ]; then
 		(umask 077; cp "$STICK/opencreator-os/authorized_keys" "$OCDIR/authorized_keys" && chmod 600 "$OCDIR/authorized_keys") ||
