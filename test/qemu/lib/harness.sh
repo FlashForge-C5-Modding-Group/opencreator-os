@@ -44,6 +44,7 @@ img_flag_hex() { img_bytes "$1" "$(poff 5)" 16 | od -An -tx1 | tr -d ' \n'; }
 img_bootlog() { img_bytes "$1" $(($(poff 5) + 65536)) 65536 | tr -d '\000'; }
 img_part_sum() { img_bytes "$1" "$(poff "$2")" "$3" | sha256sum | cut -d' ' -f1; }
 img_part_magic() { img_bytes "$1" "$(poff "$2")" 4 | od -An -tx1 | tr -d ' \n'; }
+img_tries() { img_bytes "$1" $(($(poff 5) + 196608)) 512 | tr -d '\000\n'; }
 
 # ext4 file systems inside the image: debugfs with ?offset=
 userdata_spec() { echo "$1?offset=$(poff 7)"; }
@@ -111,6 +112,8 @@ build_stock_fixture() {
 			{ print }
 			END { print "echo QEMU-STOCK-HOOK continue" }' > "$stage/qemu-app-startup.sh"
 	grep -q 'QEMU-STOCK-HOOK rc=0 stall' "$stage/qemu-app-startup.sh" || { echo "fixture: app_startup.sh stall line not found" >&2; return 1; }
+	grep -q '/mnt/runFirmwareExe.sh.*MACHINE.*PID' "$stage/qemu-app-startup.sh" ||
+		{ echo "fixture: stock hook must pass MACHINE PID" >&2; return 1; }
 	chmod 0755 "$stage/qemu-app-startup.sh"
 	rm -f "$STOCK_SQFS"
 	mksquashfs "$stage" "$STOCK_SQFS" -comp xz -all-root -noappend -quiet >/dev/null
@@ -252,7 +255,7 @@ build_openwrt_fixture() {
 	if [ "${QEMU_REFRESH_ROOTFS:-1}" = 0 ]; then
 		key=artifact-$(stat -c %Y-%s "$src")
 	else
-		key=refresh-$(stat -c %Y-%s "$src")-$(cd "$QREPO/feed/x2600/base-files" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16)
+		key=refresh-$(stat -c %Y-%s "$src")-$( { declare -f build_openwrt_fixture; cd "$QREPO/feed/x2600/base-files" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum; } | sha256sum | cut -c1-16)
 	fi
 	if [ -s "$OWRT_SQFS" ] && [ "$(cat "$OWRT_SQFS.key" 2>/dev/null)" = "$key" ]; then
 		return 0
@@ -267,6 +270,12 @@ build_openwrt_fixture() {
 		# device nodes cannot be created unprivileged; OpenWrt's image has
 		# only /dev/console, recreated below as a pseudo file
 		unsquashfs -q -n -d "$stage" "$src" >/dev/null 2>&1 || [ -x "$stage/sbin/procd" ] || return 1
+		# Replace the target-owned namespace, not just Git's unstaged deletions:
+		# an older artifact must refresh identically after staging or committing.
+		rm -rf "$stage/lib/c5"
+		rm -f "$stage"/lib/preinit/*c5* "$stage"/usr/libexec/c5* \
+			"$stage"/usr/sbin/c5* "$stage"/etc/init.d/c5* \
+			"$stage"/etc/uci-defaults/*c5*
 		(cd "$QREPO/feed/x2600/base-files" && find . -type f -print0 | xargs -0 -I{} sh -c '
 			mkdir -p "$(dirname "$1/$2")" && cp -f "$2" "$1/$2" && chmod "$(stat -c %a "$2")" "$1/$2"' _ "$stage" {})
 		# git file modes (the F: checkout may show everything as 0777/0644)
@@ -274,6 +283,11 @@ build_openwrt_fixture() {
 			f=$stage/${path#feed/x2600/base-files/}
 			[ -f "$f" ] || continue
 			if [ "$mode" = 100755 ]; then chmod 0755 "$f"; else chmod 0644 "$f"; fi
+		done
+		chmod 0755 "$stage/etc/init.d/c5-usb-hook" "$stage/usr/libexec/c5-usb-hook"
+		ln -sf ../init.d/c5-usb-hook "$stage/etc/rc.d/S19c5-usb-hook"
+		for f in "$stage"/etc/rc.d/*c5*; do
+			[ -e "$f" ] || rm -f "$f"
 		done
 		mksquashfs "$stage" "$OWRT_SQFS" -noappend -all-root -quiet -comp xz -b 256k \
 			-p '/dev/console c 600 0 0 5 1' >/dev/null
@@ -374,8 +388,8 @@ boot() {
 	# X2600's memory map) + the X2600 kernel's built-in ieee754=relaxed
 	*) cl="console=ttyS0,115200n8 loglevel=8 init=/linuxrc root=$root rootwait rootfstype=squashfs ro ieee754=relaxed$extra" ;;
 	esac
-	# user-mode network on the malta PCnet NIC (eth0): OpenWrt's lan gets a
-	# DHCP address, which c5-booted requires before it commits
+	# User-mode networking provides the normal LAN/DHCP environment; boot
+	# health itself depends only on reaching c5-booted with c5os mounted.
 	q=(qemu-system-mipsel -M malta -cpu "$QEMU_CPU" -m "$QEMU_MEM" -kernel "$VMLINUX"
 		-append "$cl"
 		-display none -monitor none -serial stdio -no-reboot
@@ -393,6 +407,7 @@ boot() {
 	rc=$?
 	if [ "$rc" != 0 ]; then
 		say "  boot '$name' driver failed (rc=$rc): $(grep -A1 '^== FAIL' "$RUN/$name.res" | tail -n 1)"
+		FAILS=$((FAILS + 1))
 	fi
 	return "$rc"
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # opencreator-os QEMU system tests (WSL/Linux, no root needed).
 #
-#   test/qemu/run.sh [SCENARIO...]     default: all (S1..S14)
+#   test/qemu/run.sh [SCENARIO...]     default: all (S1-S10, S12-S14)
 #
 # Boots the real OpenWrt root.squashfs and the stock 2.0.0 userspace on an
 # emulated eMMC with the printer's GPT, emulates the SPL's slot choice, and

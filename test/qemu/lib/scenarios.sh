@@ -13,7 +13,7 @@ OWRT_ROOT=/dev/mmcblk0p2
 # which happens inside the hook) and for QEMU to exit.
 steps_stock() {
 	cat > "$1" <<'EOF'
-expect 400 ^(QEMU-STOCK-DONE|QEMU-CHAINLOAD root=)
+expect 400 ^(QEMU-STOCK-DONE|QEMU-CHAINLOAD root=)|reboot: Restarting system
 wait-exit 240
 EOF
 }
@@ -24,11 +24,10 @@ steps_openwrt() {
 	{
 		cat <<'EOF'
 shell 400
-run 600 waitboot i=0; until dmesg | grep -q 'c5: booted:'; do i=$((i+1)); [ $i -lt 300 ] || break; sleep 2; done; dmesg | grep 'c5: '
+run 600 waitboot i=0; until dmesg | grep -qE 'c5: booted: (slot [12] healthy|chainloaded kernel|NOT healthy|root )'; do i=$((i+1)); [ $i -lt 300 ] || exit 1; sleep 2; done; dmesg | grep 'c5: '
 run 30 uname uname -r
 run 30 cmdline cat /proc/cmdline
 run 30 mounts cat /proc/mounts
-run 30 slot c5-slot status
 run 30 dropbear pidof dropbear
 run 30 float awk 'BEGIN { print 1.5 * 2 }'
 EOF
@@ -133,13 +132,15 @@ scenario_S1() {
 	check "saved stock rootfs.squashfs = stock squashfs (bytes_used)" is_eq "$(data_cat "$DISK" $ow/stock/rootfs.squashfs | sha256sum | cut -d' ' -f1)" "$STOCK_SQ_SUM"
 	check "stock SHA256SUMS lists both images" bash -c "[ \"\$(debugfs -R 'cat $ow/stock/SHA256SUMS' '$(userdata_spec "$DISK")' 2>/dev/null | awk '{print \$2}' | tr '\n' ' ')\" = 'kernel.img rootfs.squashfs ' ]"
 	check "stock MANIFEST.txt records slot 2" bash -c "debugfs -R 'cat $ow/stock/MANIFEST.txt' '$(userdata_spec "$DISK")' 2>/dev/null | grep -qx 'slot: 2'"
-	check "wifi.conf from usershare wpa_supplicant.conf" is_eq "$(data_cat "$DISK" $ow/wifi.conf)" "# from stock wpa_supplicant.conf (wifi_conf)
+	check "wifi.conf saved on c5os from usershare" is_eq "$(c5os_cat "$DISK" $ow/wifi.conf)" "# from stock wpa_supplicant.conf (wifi_conf)
 SSID='QEMU Test Net'
 PSK='qemu-psk-'\\''quoted'\\''-123'"
 	check "install.state = written slot=1" bash -c "debugfs -R 'cat $ow/install.state' '$(userdata_spec "$DISK")' 2>/dev/null | grep -q '^written slot=1 kernel=/dev/mmcblk0p1 rootfs=/dev/mmcblk0p2 '"
 	check "chainload files copied to userdata" bash -c "for f in chainload.ko c5-chainload.sh kernel.uimage; do debugfs -R \"stat $ow/chainload/\$f\" '$(userdata_spec "$DISK")' 2>/dev/null | grep -q '^Inode:' || exit 1; done"
 	check "install log on the stick ends with the 'next:' hints" bash -c "mtype -i '$RUN/stick-s1-stock.img@@1M' ::opencreator-os-install.log | grep -q 'next: or switch for real'"
-	check "c5os untouched" is_eq "$(img_part_sum "$DISK" 8 $((PSIZE[8] * 512)))" "$(img_part_sum "$C5OS_DISK" 8 $((PSIZE[8] * 512)))"
+	check "hook model stored on c5os" is_eq "$(c5os_cat "$DISK" $ow/model)" "Creator5Pro 0029"
+	check "credentials not copied to userdata" bash -c "! debugfs -R 'stat $ow/wifi.conf' '$(userdata_spec "$DISK")' 2>/dev/null | grep -q '^Inode:'"
+	check "first install has matching pending commit" is_eq "$(c5os_cat "$DISK" $ow/pending-commit)" "slot=1"
 }
 
 # S2: install with CHAINLOAD -> fake jump -> OpenWrt from p2, committed.
@@ -154,25 +155,28 @@ scenario_S2() {
 	local st=$RUN/s2-openwrt.steps
 	steps_openwrt "$st" <<'EOF'
 run 30 wificonf cat /etc/c5/wifi.conf
-run 30 fstab uci -q get fstab.data.device; uci -q get fstab.data.target
+run 30 fstab uci -q get fstab.data.label; uci -q get fstab.data.target
+run 30 hostname uci -q get system.@system[0].hostname
 run 30 logs ls /data/opencreator-os/logs/
 run 30 overlay mount | grep -E ' on /overlay | on / '
 EOF
 	boot s2-openwrt "$DISK" "$(chainload_cmdline s2-stock)" "$st"
 	check "OpenWrt shell reached and c5-booted ran" res_has s2-openwrt waitboot 'c5: booted:'
-	check "preinit tryboot armed the fallback" res_has s2-openwrt waitboot 'c5: tryboot: slot 1 booting; flag -> slot 2 \(fallback armed\)'
+	check "preinit counted the boot without changing the flag" res_has s2-openwrt waitboot 'c5: tryboot: slot 1 booting; tries=1/3; flag untouched'
 	check "c5-booted committed slot 1" res_has s2-openwrt waitboot 'c5: booted: .*flag -> slot 1 \(OpenWrt\)'
 	check "flag is now ota:kernel" is_eq "$(img_flag "$DISK")" ota:kernel
-	check "bootlog in ota+64KiB has tryboot then booted" bash -c "printf '%s' \"\$1\" | sed -n '1p;\$p' | tr '\n' '|' | grep -q '^C5BOOTLOG1|.*booted: .*flag -> slot 1'" _ "$(img_bootlog "$DISK")"
+	check "healthy boot reset tries" is_eq "$(img_tries "$DISK")" "C5TRIES1 0"
+	check "healthy kernel checksum saved on c5os" is_eq "$(c5os_cat "$DISK" /opencreator-os/good-kernel)" "$OW_K_SUM"
+	check "hostname derived from hook model" res_has s2-openwrt hostname '^creator5pro$'
+	check "bootlog records healthy boot" bash -c "printf '%s' \"\$1\" | grep -q 'booted: slot 1 healthy; good kernel recorded'" _ "$(img_bootlog "$DISK")"
 	check "bootlog order: tryboot before booted" bash -c "printf '%s\n' \"\$1\" | awk '/tryboot: slot 1 booting/{t=NR} /booted: .*flag -> slot 1/{b=NR} END{exit !(t && b && t < b)}'" _ "$(img_bootlog "$DISK")"
 	check "/rom is the squashfs root, / the overlay" res_has s2-openwrt mounts "^overlayfs:/overlay / overlay "
 	check "/overlay is ext4 on a loop device" res_has s2-openwrt mounts '^/dev/loop[0-9]+ /overlay ext4'
 	check "/data = c5os (mmcblk0p8)" res_has s2-openwrt mounts '^/dev/mmcblk0p8 /data ext4'
-	check "fstab: /data on mmcblk0p8" bash -c "[ \"\$(printf '%s\n' \"\$1\" | tr -d '\r' | tr '\n' ' ')\" = '/dev/mmcblk0p8 /data ' ]" _ "$(res_out "$RUN/s2-openwrt.res" fstab)"
+	check "fixed fstab selects c5os label at /data" bash -c "[ \"\$(printf '%s\n' \"\$1\" | tr -d '\r' | tr '\n' ' ')\" = 'c5os /data ' ]" _ "$(res_out "$RUN/s2-openwrt.res" fstab)"
 	check "wifi.conf imported to /etc/c5/wifi.conf" res_has s2-openwrt wificonf "^SSID='QEMU Test Net'"
 	check "dropbear running" res_ok s2-openwrt dropbear
 	check "hard-float userland works (awk 1.5*2 = 3)" res_has s2-openwrt float '^3$'
-	check "c5-slot status reports slot 1" res_has s2-openwrt slot '1'
 	check "overlay (rootfs_data) is ext4 after the squashfs on p2" overlay_is_ext4 "$DISK" 2
 	check "wifi.conf persisted in the overlay upper dir" bash -c "debugfs -R 'cat /upper/etc/c5/wifi.conf' '$(overlay_spec "$DISK" 2)' 2>/dev/null | grep -q '^SSID='"
 	check "logs written to c5os opencreator-os/logs" bash -c "for f in dmesg-last.txt logread-last.txt bootlog-last.txt; do debugfs -R \"stat /opencreator-os/logs/\$f\" '$(c5os_spec "$DISK")' 2>/dev/null | grep -q '^Inode:' || exit 1; done"
@@ -181,74 +185,77 @@ EOF
 	fi
 }
 
-# S3: SPL boots OpenWrt; try-once arms stock then commits; overlay persists.
+# S3: normal SPL boots count failures without rewriting the flag; health
+# resets the counter and the overlay survives the next boot.
 scenario_S3() {
 	new_disk
 	prepare_committed || return 0
 	check "SPL emulator picks p2 for ota:kernel" is_eq "$(spl_root "$DISK")" "$OWRT_ROOT"
-	local st=$RUN/s3-a.steps
+	printf 'C5TRIES1 2\n' | dd of="$DISK" bs=512 seek=$((PSTART[5] + 384)) conv=sync,notrunc status=none
+	local st=$RUN/s3-a.steps token
 	steps_openwrt "$st" <<'EOF'
 run 30 persist echo qemu-persist-$$ > /etc/qemu-persist; sync; cat /etc/qemu-persist
-run 30 fstab uci -q get fstab.data.device
+run 30 fstab uci -q get fstab.data.label
 EOF
 	boot s3-a "$DISK" "$(spl_root "$DISK")" "$st"
-	check "boot 1: tryboot armed slot 2" res_has s3-a waitboot 'tryboot: slot 1 booting; flag -> slot 2'
-	check "boot 1: /data on c5os" res_has s3-a fstab '^/dev/mmcblk0p8'
-	check "boot 1: /data = mmcblk0p8" res_has s3-a mounts '^/dev/mmcblk0p8 /data ext4'
-	check "boot 1: committed slot 1" res_has s3-a waitboot 'booted: .*flag -> slot 1'
-	check "boot 1: flag ota:kernel" is_eq "$(img_flag "$DISK")" ota:kernel
-	local token
+	check "boot 1: third attempt retains OpenWrt" res_has s3-a waitboot 'tryboot: slot 1 booting; tries=3/3; flag untouched'
+	check "boot 1: fixed label resolves to /data" res_has s3-a mounts '^/dev/mmcblk0p8 /data ext4'
+	check "boot 1: healthy without a pending commit" res_has s3-a waitboot 'booted: slot 1 healthy; good kernel recorded'
+	check "boot 1: no redundant flag commit" log_lacks s3-a 'booted: committed'
+	check "boot 1: counter reset" is_eq "$(img_tries "$DISK")" "C5TRIES1 0"
+	check "boot 1: flag unchanged" is_eq "$(img_flag "$DISK")" ota:kernel
 	token=$(res_out "$RUN/s3-a.res" persist | tail -n 1)
 	st=$RUN/s3-b.steps
 	steps_openwrt "$st" <<'EOF'
 run 30 persist cat /etc/qemu-persist
 EOF
 	boot s3-b "$DISK" "$(spl_root "$DISK")" "$st"
-	check "boot 2: file written in boot 1 is still there" is_eq "$(res_out "$RUN/s3-b.res" persist | tail -n 1)" "$token"
-	check "boot 2: committed again" res_has s3-b waitboot 'booted: .*flag -> slot 1'
-	check "boot 2: flag ota:kernel" is_eq "$(img_flag "$DISK")" ota:kernel
+	check "boot 2: persisted file survives" is_eq "$(res_out "$RUN/s3-b.res" persist | tail -n 1)" "$token"
+	check "boot 2: starts counting at one again" res_has s3-b waitboot 'tryboot: slot 1 booting; tries=1/3'
+	check "boot 2: health resets counter" is_eq "$(img_tries "$DISK")" "C5TRIES1 0"
+	check "boot 2: flag unchanged" is_eq "$(img_flag "$DISK")" ota:kernel
 }
 
-# S4: unhealthy boot falls back to stock; stock switches back; commit.
+# S4: kill after preinit three times; fourth preinit selects stock. Invalid
+# stock blocks fallback even after the limit; a healthy boot still resets tries.
 scenario_S4() {
 	new_disk
 	prepare_committed || return 0
-	echo test > "$RUN/marker"
-	check "inject tryboot-fail-test marker (c5os)" c5os_put "$DISK" "$RUN/marker" /opencreator-os/tryboot-fail-test
-	local st=$RUN/s4-a.steps
-	steps_openwrt "$st" < /dev/null
-	boot s4-a "$DISK" "$(spl_root "$DISK")" "$st"
-	check "boot 1 (OpenWrt): NOT healthy" res_has s4-a waitboot 'booted: NOT healthy \(.*tryboot-fail-test marker present'
-	check "boot 1: flag left on stock (ota:kernel2)" is_eq "$(img_flag "$DISK")" ota:kernel2
-	check "SPL emulator now picks the stock slot" is_eq "$(spl_root "$DISK")" "$STOCK_SLOT_ROOT"
+	local st n
+	for n in 1 2 3; do
+		st=$RUN/s4-fail-$n.steps
+		printf 'kill-when 400 c5: tryboot: slot 1 booting; tries=%s/3; flag untouched\n' "$n" > "$st"
+		boot "s4-fail-$n" "$DISK" "$(spl_root "$DISK")" "$st"
+		check "failed boot $n counts after preinit" is_eq "$(img_tries "$DISK")" "C5TRIES1 $n"
+		check "failed boot $n keeps OpenWrt selected" is_eq "$(img_flag "$DISK")" ota:kernel
+	done
+	st=$RUN/s4-fallback.steps
+	printf 'expect 400 c5: tryboot: slot 1 failed 3 boots; flag -> slot 2 \\(stock\\); rebooting\nwait-exit 240\n' > "$st"
+	boot s4-fallback "$DISK" "$(spl_root "$DISK")" "$st"
+	check "fourth preinit reboots into stock" is_eq "$(boot_outcome s4-fallback):$(img_flag "$DISK")" reboot:ota:kernel2
+	check "fallback resets counter" is_eq "$(img_tries "$DISK")" "C5TRIES1 0"
+	steps_stock "$RUN/s4-stock.steps"
+	boot s4-stock "$DISK" "$(spl_root "$DISK")" "$RUN/s4-stock.steps"
+	check "stock boots after three failed OpenWrt boots" log_has s4-stock '^QEMU-STOCK-DONE flag=ota:kernel2'
 
-	# stock: the user removes the marker (on the host: stock cannot see c5os)
-	# and runs switch-to-openwrt.sh from the stick
-	check "remove the marker" c5os_rm "$DISK" /opencreator-os/tryboot-fail-test
-	make_payload "$RUN/payload-s4" || { fatal "make-install-stick.sh failed"; return 0; }
-	rm -f "$RUN/payload-s4/runFirmwareExe.sh"
-	make_stick "$RUN/payload-s4" "$RUN/stick-s4.img"
-	cat > "$RUN/action.sh" <<'EOF'
-mkdir -p /mnt && mount -t vfat /dev/sda1 /mnt && sh /mnt/opencreator-os/switch-to-openwrt.sh
-EOF
-	data_put "$DISK" "$RUN/action.sh" /qemu-action.sh
-	st=$RUN/s4-b.steps
-	steps_stock "$st"
-	boot s4-b "$DISK" "$(spl_root "$DISK")" "$st" "$RUN/stick-s4.img"
-	check "boot 2 (stock) ran" log_has s4-b '^QEMU-STOCK-INIT root=/dev/mmcblk0p4'
-	check "boot 2: switch-to-openwrt.sh flipped the flag" log_has s4-b "switch: boot flag -> slot 1 \('ota:kernel'\)"
-	check "boot 2: ended in a reboot" is_eq "$(boot_outcome s4-b)" reboot
-	check "flag ota:kernel" is_eq "$(img_flag "$DISK")" ota:kernel
-	st=$RUN/s4-c.steps
-	steps_openwrt "$st" < /dev/null
-	boot s4-c "$DISK" "$(spl_root "$DISK")" "$st"
-	check "boot 3 (OpenWrt) healthy and committed" res_has s4-c waitboot 'booted: .*flag -> slot 1'
-	check "flag ota:kernel" is_eq "$(img_flag "$DISK")" ota:kernel
+	new_disk
+	prepare_committed || return 0
+	printf 'C5TRIES1 3\n' | dd of="$DISK" bs=512 seek=$((PSTART[5] + 384)) conv=sync,notrunc status=none
+	printf 'C5STOCKINVALID1 slot' | dd of="$DISK" bs=512 seek=$((PSTART[5] + 256)) conv=sync,notrunc status=none
+	st=$RUN/s4-blocked.steps
+	echo 'kill-when 400 c5: tryboot: slot 1 booting; tries=4; .*NO fallback' > "$st"
+	boot s4-blocked "$DISK" "$(spl_root "$DISK")" "$st"
+	check "unselectable stock never gets the flag" is_eq "$(img_flag "$DISK")" ota:kernel
+	check "blocked fourth attempt still counts" is_eq "$(img_tries "$DISK")" "C5TRIES1 4"
+	steps_openwrt "$RUN/s4-healthy.steps" < /dev/null
+	boot s4-healthy "$DISK" "$(spl_root "$DISK")" "$RUN/s4-healthy.steps"
+	check "healthy blocked-fallback boot resets counter" is_eq "$(img_tries "$DISK")" "C5TRIES1 0"
+	check "healthy boot retains OpenWrt" is_eq "$(img_flag "$DISK")" ota:kernel
 }
 
 # Build a second sysupgrade.tar: root = test root + /etc/qemu-test-version,
 # kernel and fwtool metadata from the build's sysupgrade.tar.
-make_sysupgrade_v2() { # OUT
+make_sysupgrade_v2() { # OUT [changed-kernel]
 	local out=$1 w=$RUN/su fw=$OWRT_DIR/staging_dir/host/bin/fwtool dir
 	[ -x "$fw" ] || { echo "no $fw"; return 1; }
 	rm -rf "$w"
@@ -259,6 +266,19 @@ make_sysupgrade_v2() { # OUT
 	tar -xf "$w/orig.tar" -C "$w/x"
 	dir=$(cd "$w/x" && ls -d sysupgrade-*)
 	[ -f "$w/x/$dir/root" ] && [ -f "$w/x/$dir/kernel" ] || { echo "unexpected tar layout"; return 1; }
+	if [ "${2:-}" = changed-kernel ]; then
+		# A different, valid uImage header (timestamp + corrected header CRC),
+		# with the same payload. QEMU executes its own malta kernel.
+		python3 - "$w/x/$dir/kernel" <<'EOF' || return 1
+import struct, sys, zlib
+p = sys.argv[1]
+b = bytearray(open(p, "rb").read())
+struct.pack_into(">I", b, 8, struct.unpack_from(">I", b, 8)[0] ^ 1)
+struct.pack_into(">I", b, 4, 0)
+struct.pack_into(">I", b, 4, zlib.crc32(b[:64]) & 0xffffffff)
+open(p, "wb").write(b)
+EOF
+	fi
 	unsquashfs -q -n -d "$w/root/r" "$OWRT_SQFS" >/dev/null 2>&1 || [ -x "$w/root/r/sbin/procd" ] || return 1
 	echo "qemu-v2-$RUNID" > "$w/root/r/etc/qemu-test-version"
 	rm -f "$w/x/$dir/root"
@@ -267,18 +287,45 @@ make_sysupgrade_v2() { # OUT
 	(cd "$w/x" && tar -c --owner=0 --group=0 --numeric-owner --sort=name -f "$out" "$dir")
 	"$fw" -q -I "$w/meta.json" "$out"
 	cp "$w/x/$dir/root" "$RUN/v2-root.squashfs"
+	cp "$w/x/$dir/kernel" "$RUN/v2-kernel.uimage"
 }
 
-# S5: sysupgrade (test-then-commit), refusal of garbage, power cut.
+# S5: known-good direct upgrade, changed-kernel test/commit, garbage and cut.
 scenario_S5() {
 	new_disk
 	prepare_committed || return 0
 	make_sysupgrade_v2 "$RUN/v2.tar" > "$RUN/su.log" 2>&1 || { fatal "building the v2 sysupgrade.tar failed: $(tail -n 3 "$RUN/su.log")"; return 0; }
 	c5os_mkdir "$DISK" /qemu
-	check "copy v2 sysupgrade.tar into c5os" c5os_put "$DISK" "$RUN/v2.tar" /qemu/v2.tar
-	local v2sum v2len st
+	c5os_put "$DISK" "$RUN/v2.tar" /qemu/v2.tar
+	local v2sum v2len v2ksum st
+	st=$RUN/s5-direct.steps
+	cat > "$st" <<'EOF'
+shell 400
+run 600 waitboot i=0; until dmesg | grep -q 'c5: booted:'; do i=$((i+1)); [ $i -lt 300 ] || break; sleep 2; done
+run 60 copy cp /data/qemu/v2.tar /tmp/v2.tar && sysupgrade -T /tmp/v2.tar
+send sysupgrade -v /tmp/v2.tar
+wait-exit 900
+EOF
+	boot s5-direct "$DISK" "$(spl_root "$DISK")" "$st"
+	check "same-kernel sysupgrade reboots" is_eq "$(boot_outcome s5-direct)" reboot
+	check "known-good direct upgrade retains OpenWrt flag" is_eq "$(img_flag "$DISK")" ota:kernel
+	check "known-good direct upgrade has no pending commit" bash -c "! debugfs -R 'stat /opencreator-os/pending-commit' '$(c5os_spec "$DISK")' 2>/dev/null | grep -q '^Inode:'"
+	check "bootlog identifies known-good direct path" bash -c "printf '%s' \"\$1\" | grep -q 'known-good kernel; flag stays on OpenWrt'" _ "$(img_bootlog "$DISK")"
+	steps_openwrt "$RUN/s5-direct-next.steps" <<'EOF'
+run 30 version cat /etc/qemu-test-version
+EOF
+	boot s5-direct-next "$DISK" "$(spl_root "$DISK")" "$RUN/s5-direct-next.steps"
+	check "same-kernel upgraded root boots directly" res_has s5-direct-next version '^qemu-v2-'
+	check "same-kernel healthy boot resets counter" is_eq "$(img_tries "$DISK")" "C5TRIES1 0"
+
+	new_disk
+	prepare_committed || return 0
+	make_sysupgrade_v2 "$RUN/v2.tar" changed-kernel > "$RUN/su-changed.log" 2>&1 || { fatal "building changed-kernel sysupgrade failed"; return 0; }
+	c5os_mkdir "$DISK" /qemu
+	check "copy changed-kernel sysupgrade into c5os" c5os_put "$DISK" "$RUN/v2.tar" /qemu/v2.tar
 	v2sum=$(sha256sum < "$RUN/v2-root.squashfs" | cut -d' ' -f1)
 	v2len=$(stat -c %s "$RUN/v2-root.squashfs")
+	v2ksum=$(sha256sum < "$RUN/v2-kernel.uimage" | cut -d' ' -f1)
 
 	st=$RUN/s5-a.steps
 	cat > "$st" <<'EOF'
@@ -299,10 +346,10 @@ EOF
 	check "v2 image passes sysupgrade -T" res_has s5-a copy 'test-rc=0'
 	check "sysupgrade ended in a reboot" is_eq "$(boot_outcome s5-a)" reboot
 	check "p2 = v2 root" is_eq "$(img_part_sum "$DISK" 2 "$v2len")" "$v2sum"
-	check "p1 = kernel" is_eq "$(img_part_sum "$DISK" 1 "$OW_K_LEN")" "$OW_K_SUM"
+	check "p1 = changed kernel" is_eq "$(img_part_sum "$DISK" 1 "$OW_K_LEN")" "$v2ksum"
 	check "flag left on stock (ota:kernel2) until a test boot commits" is_eq "$(img_flag "$DISK")" ota:kernel2
 	check "pending-commit marker for slot 1 (c5os)" bash -c "debugfs -R 'cat /opencreator-os/pending-commit' '$(c5os_spec "$DISK")' 2>/dev/null | grep -qx 'slot=1'"
-	check "chainload/kernel.uimage = new kernel" is_eq "$(data_cat "$DISK" /opencreator-os/chainload/kernel.uimage | sha256sum | cut -d' ' -f1)" "$OW_K_SUM"
+	check "chainload/kernel.uimage = changed kernel" is_eq "$(data_cat "$DISK" /opencreator-os/chainload/kernel.uimage | sha256sum | cut -d' ' -f1)" "$v2ksum"
 	check "config saved to c5os (sysupgrade.tgz)" c5os_has "$DISK" /opencreator-os/sysupgrade.tgz
 	check "bootlog: written and verified, flag stays on stock" bash -c "printf '%s' \"\$1\" | grep -q 'sysupgrade: slot 1 written and verified; flag stays on stock'" _ "$(img_bootlog "$DISK")"
 	check "SPL emulator now picks stock" is_eq "$(spl_root "$DISK")" "$STOCK_SLOT_ROOT"
@@ -364,82 +411,61 @@ damage_stock_slot() {
 	dd if=/dev/urandom of="$DISK" bs=512 seek=$((PSTART[3] + 256)) count=256 conv=notrunc status=none
 }
 
-# S6: c5-restore-stock from OpenWrt; OpenWrt USB recovery hook.
+# S6: real OpenWrt USB hook + install stick, headless ACTION repair and swap.
 scenario_S6() {
 	new_disk
 	prepare_committed || return 0
 	damage_stock_slot
-	local st=$RUN/s6-a.steps
-	cat > "$st" <<'EOF'
-shell 400
-run 600 waitboot i=0; until dmesg | grep -q 'c5: booted:'; do i=$((i+1)); [ $i -lt 300 ] || break; sleep 2; done; dmesg | grep 'c5: '
-run 300 dry c5-restore-stock --dry-run
-send c5-restore-stock --reboot
-wait-exit 600
-EOF
-	boot s6-a "$DISK" "$(spl_root "$DISK")" "$st"
-	check "dry run passes" res_has s6-a dry '^restore: OK \(dry run\)'
-	check "restore printed OK and rebooted" log_has s6-a '^restore: OK; flag -> slot 2, rebooting'
-	check "p3 = saved stock kernel (whole partition)" is_eq "$(img_part_sum "$DISK" 3 $((PSIZE[3] * 512)))" "$BASE_P3"
-	check "p4 = stock squashfs" is_eq "$(img_part_sum "$DISK" 4 "$STOCK_SQ_LEN")" "$STOCK_SQ_SUM"
-	check "flag ota:kernel2" is_eq "$(img_flag "$DISK")" ota:kernel2
-	st=$RUN/s6-b.steps
-	steps_stock "$st"
-	boot s6-b "$DISK" "$(spl_root "$DISK")" "$st"
-	check "stock boots from the restored slot" log_has s6-b '^QEMU-STOCK-DONE flag=ota:kernel2'
+	local st=$RUN/s6-repair.steps stick=$RUN/stick-s6.img
+	make_payload "$RUN/payload-s6" || { fatal "make-install-stick.sh failed"; return 0; }
+	printf 'repair-stock\r\n' > "$RUN/payload-s6/opencreator-os/ACTION"
+	make_stick "$RUN/payload-s6" "$stick"
+	printf 'shell 400\nsend logread -f\nexpect 900 reboot: Restarting system\nwait-exit 240\n' > "$st"
+	boot s6-repair "$DISK" "$(spl_root "$DISK")" "$st" "$stick"
+	check "headless repair reboots to stock" is_eq "$(boot_outcome s6-repair):$(img_flag "$DISK")" reboot:ota:kernel2
+	check "hook forwards saved model to installer" bash -c "mtype -i '$stick@@1M' ::opencreator-os-install.log | grep -q 'check: model: Creator5Pro 0029'"
+	check "repair restores exact stock kernel and squashfs" is_eq "$(img_part_sum "$DISK" 3 $((PSIZE[3] * 512)))$(img_part_sum "$DISK" 4 "$STOCK_SQ_LEN")" "$BASE_P3$STOCK_SQ_SUM"
+	check "repair clears invalid marker" stockinv_clear
+	steps_stock "$RUN/s6-stock.steps"
+	boot s6-stock "$DISK" "$(spl_root "$DISK")" "$RUN/s6-stock.steps"
+	check "repaired stock boots" log_has s6-stock '^QEMU-STOCK-DONE flag=ota:kernel2'
 
-	# USB recovery hook (OpenWrt side)
-	if [ ! -f "$QREPO/feed/x2600/base-files/usr/libexec/c5-usb-recovery" ]; then
-		say "  SKIP USB recovery hook: usr/libexec/c5-usb-recovery not in the tree"
-		return 0
-	fi
 	new_disk
 	prepare_committed || return 0
 	damage_stock_slot
-	mkdir -p "$RUN/rec/opencreator-os-recovery"
-	printf '# QEMU test\nrestore-stock\n' > "$RUN/rec/opencreator-os-recovery/restore.conf"
-	make_stick "$RUN/rec" "$RUN/stick-rec.img"
-	st=$RUN/s6-rec.steps
-	cat > "$st" <<'EOF'
-expect 900 reboot: Restarting system
-wait-exit 60
-EOF
-	boot s6-rec "$DISK" "$(spl_root "$DISK")" "$st" "$RUN/stick-rec.img"
-	check "recovery hook rebooted" is_eq "$(boot_outcome s6-rec)" reboot
-	check "p3/p4 restored by the recovery hook" is_eq "$(img_part_sum "$DISK" 3 $((PSIZE[3] * 512)))$(img_part_sum "$DISK" 4 "$STOCK_SQ_LEN")" "$BASE_P3$STOCK_SQ_SUM"
-	check "flag ota:kernel2" is_eq "$(img_flag "$DISK")" ota:kernel2
-	check "restore.conf retired as restore.done" bash -c "mdir -b -i '$RUN/stick-rec.img@@1M' ::opencreator-os-recovery/ | grep -q restore.done"
-	check "result.log on the stick says OK" bash -c "mtype -i '$RUN/stick-rec.img@@1M' ::opencreator-os-recovery/result.log | grep -q 'OK: restore-stock'"
-	check "bootlog records usb-recovery done" bash -c "printf '%s' \"\$1\" | grep -q 'usb-recovery: done'" _ "$(img_bootlog "$DISK")"
-	st=$RUN/s6-rec-next.steps
-	steps_stock "$st"
-	boot s6-rec-next "$DISK" "$(spl_root "$DISK")" "$st"
-	check "stock boots after the recovery hook" log_has s6-rec-next '^QEMU-STOCK-DONE flag=ota:kernel2'
-	check "stock-invalid mark cleared after the hook's restore" stockinv_clear
+	printf 'shell 400\nsend logread -f\nkill-when 900 writing rootfs.squashfs .* -> /dev/mmcblk0p4\n' > "$RUN/s6-cut.steps"
+	boot s6-cut "$DISK" "$(spl_root "$DISK")" "$RUN/s6-cut.steps" "$stick"
+	check "interrupted repair retains OpenWrt flag" is_eq "$(img_flag "$DISK")" ota:kernel
+	check "interrupted repair marks stock invalid" stockinv_set
+	boot s6-retry "$DISK" "$(spl_root "$DISK")" "$st" "$stick"
+	check "retry refuses fallback to invalid stock" log_has s6-retry 'tryboot: .*NO fallback'
+	check "same repair stick completes on next run" is_eq "$(boot_outcome s6-retry):$(img_flag "$DISK")" reboot:ota:kernel2
+	check "retry restores exact stock contents" is_eq "$(img_part_sum "$DISK" 3 $((PSIZE[3] * 512)))$(img_part_sum "$DISK" 4 "$STOCK_SQ_LEN")" "$BASE_P3$STOCK_SQ_SUM"
+	check "retry clears invalid marker" stockinv_clear
+	boot s6-retry-stock "$DISK" "$(spl_root "$DISK")" "$RUN/s6-stock.steps"
+	check "stock boots after interrupted repair retry" log_has s6-retry-stock '^QEMU-STOCK-DONE flag=ota:kernel2'
 
-	# power cut while c5-restore-stock writes the stock slot
 	new_disk
 	prepare_committed || return 0
-	damage_stock_slot
-	st=$RUN/s6-cut.steps
-	cat > "$st" <<'EOF'
-shell 400
-run 600 waitboot i=0; until dmesg | grep -q 'c5: booted:'; do i=$((i+1)); [ $i -lt 300 ] || break; sleep 2; done; dmesg | grep 'c5: '
-send c5-restore-stock
-kill-when 300 stock marked invalid .* while it is written
+	printf 'swap\n' > "$RUN/payload-s6/opencreator-os/ACTION"
+	make_stick "$RUN/payload-s6" "$stick"
+	boot s6-swap "$DISK" "$(spl_root "$DISK")" "$st" "$stick"
+	check "headless swap selects stock and reboots" is_eq "$(boot_outcome s6-swap):$(img_flag "$DISK")" reboot:ota:kernel2
+	check "swap resets tries" is_eq "$(img_tries "$DISK")" "C5TRIES1 0"
+	boot s6-swap-stock "$DISK" "$(spl_root "$DISK")" "$RUN/s6-stock.steps"
+	check "stock boots after headless swap" log_has s6-swap-stock '^QEMU-STOCK-DONE flag=ota:kernel2'
+
+	new_disk
+	prepare_committed || return 0
+	printf 'C5STOCKINVALID1 slot' | dd of="$DISK" bs=512 seek=$((PSTART[5] + 256)) conv=sync,notrunc status=none
+	steps_openwrt "$RUN/s6-refuse.steps" <<'EOF'
+run 30 hooklog logread
 EOF
-	boot s6-cut "$DISK" "$(spl_root "$DISK")" "$st"
-	check "cut restore: flag on OpenWrt (ota:kernel)" is_eq "$(img_flag "$DISK")" ota:kernel
-	check "cut restore: stock marked invalid (ota+128KiB)" stockinv_set
-	st=$RUN/s6-cut-next.steps
-	steps_openwrt "$st" <<'EOF'
-run 300 restore c5-restore-stock
-EOF
-	boot s6-cut-next "$DISK" "$(spl_root "$DISK")" "$st"
-	check "next boot is OpenWrt; tryboot did not arm the invalid stock" res_has s6-cut-next waitboot 'tryboot: slot 1 booting; .*flag stays on slot 1 \(NO fallback\)'
-	check "restore re-run from OpenWrt completes" res_has s6-cut-next restore '^restore: OK'
-	check "p3/p4 restored" is_eq "$(img_part_sum "$DISK" 3 $((PSIZE[3] * 512)))$(img_part_sum "$DISK" 4 "$STOCK_SQ_LEN")" "$BASE_P3$STOCK_SQ_SUM"
-	check "stock-invalid mark cleared" stockinv_clear
+	boot s6-refuse "$DISK" "$(spl_root "$DISK")" "$RUN/s6-refuse.steps" "$stick"
+	check "refused swap invocation reaches installer with stored model" res_has s6-refuse hooklog 'check: model: Creator5Pro 0029'
+	check "installer refuses swap when stock is not selectable" res_has s6-refuse hooklog 'Cannot select stock'
+	check "refused swap never selects stock" is_eq "$(img_flag "$DISK")" ota:kernel
+	check "refused swap does not clear invalid mark" stockinv_set
 }
 
 stockinv_set() { [ "$(img_bytes "$DISK" $(($(poff 5) + 131072)) 15)" = C5STOCKINVALID1 ]; }
@@ -463,7 +489,8 @@ EOF
 	st=$RUN/s10-openwrt.steps
 	steps_openwrt "$st" < /dev/null
 	boot s10-openwrt "$DISK" "$(chainload_cmdline s10-stock)" "$st"
-	check "tryboot armed the stock fallback" res_has s10-openwrt waitboot "c5: tryboot: slot 1 booting; flag -> slot 2"
+	check "foreign chainload leaves counter and flag untouched" res_has s10-openwrt waitboot 'tryboot: slot 1 booting \(c5.nocommit=1\); counter and flag untouched'
+	check "foreign chainload does not start counter" is_eq "$(img_tries "$DISK")" ""
 	check "c5-booted did not commit (nocommit)" res_has s10-openwrt waitboot 'booted: chainloaded kernel is not slot 1.s own kernel \(c5\.nocommit=1\)'
 	check "flag still on stock" is_eq "$(img_flag "$DISK")" ota:kernel2
 }
@@ -554,133 +581,6 @@ scenario_S9() {
 	check "flag still on stock" is_eq "$(img_flag_hex "$DISK")" "$(img_flag_hex "$BASE_DISK")"
 }
 
-# S11: zero-write USB test stick (tools/make-test-stick.sh): stock's hook
-# chainloads OpenWrt with its root on the stick, OpenWrt reports to the
-# stick. Nothing may be written to the eMMC.
-
-# make_test_stick IMG [corrupt]: the product stick image from the OpenWrt
-# fixture, with the fake c5-chainload.sh and re-made checksums; "corrupt"
-# flips one byte of kernel.uimage after the checksums were made
-make_test_stick() {
-	local img=$1 vdir=$RUN/vdir/qemu-test t=$RUN/stick-dir
-	rm -rf "$vdir" "$t"
-	mkdir -p "$vdir" "$t"
-	ln -s "$OWRT_SQFS" "$vdir/${OWRT_ART##*/}-root.squashfs"
-	ln -s "$OWRT_ART-kernel.uimage" "$vdir/${OWRT_ART##*/}-kernel.uimage"
-	"$QREPO/tools/make-test-stick.sh" "$vdir" "$img" > "$RUN/make-test-stick.log" 2>&1 || return 1
-	mcopy -s -n -i "$img@@1M" ::opencreator-os-test "$t/" || return 1
-	fake_chainload > "$t/opencreator-os-test/c5-chainload.sh"
-	resum "$t/opencreator-os-test"
-	if [ "${2:-}" = corrupt ]; then
-		printf '\xff' | dd of="$t/opencreator-os-test/kernel.uimage" bs=1 \
-			seek=$(($(stat -c %s "$t/opencreator-os-test/kernel.uimage") / 2)) conv=notrunc status=none
-	fi
-	mcopy -o -i "$img@@1M" "$t/opencreator-os-test/c5-chainload.sh" "$t/opencreator-os-test/SHA256SUMS" \
-		"$t/opencreator-os-test/MD5SUMS" "$t/opencreator-os-test/kernel.uimage" ::opencreator-os-test/
-}
-stick_test_cat() { mtype -i "$1@@1M" "::opencreator-os-test/$2" 2>/dev/null | tr -d '\r'; }
-
-# img_regions DISK: sha256 per region - GPT head (LBA 0..2047), p1..p7, the
-# rest (backup GPT)
-img_regions() {
-	local p end
-	echo "head $(img_bytes "$1" 0 $((PSTART[1] * 512)) | sha256sum | cut -c1-16)"
-	for p in 1 2 3 4 5 6; do
-		echo "p$p $(img_part_sum "$1" "$p" $((PSIZE[$p] * 512)) | cut -c1-16)"
-	done
-	end=$(sgdisk -i 7 "$1" | sed -n 's/^Last sector: \([0-9]*\).*/\1/p')
-	echo "p7 $(img_bytes "$1" "$(poff 7)" $(((end + 1 - PSTART[7]) * 512)) | sha256sum | cut -c1-16)"
-	echo "tail $(tail -c +$(((end + 1) * 512 + 1)) "$1" | sha256sum | cut -c1-16)"
-}
-# fs_tree DISK PART OUTDIR: file tree of an ext4 partition (contents only)
-fs_tree() {
-	rm -rf "$3"
-	mkdir -p "$3"
-	debugfs -R "rdump / $3" "$1?offset=$(poff "$2")" >/dev/null 2>&1
-}
-
-scenario_S11() {
-	if [ ! -f "$QREPO/tools/make-test-stick.sh" ]; then
-		SKIP_WHY="tools/make-test-stick.sh not in the tree"
-		return 77
-	fi
-	new_stock_disk
-	local stick=$RUN/stick-s11.img st r r0 r1 r2 sum0 sum1 summary cl
-	make_test_stick "$stick" || { fatal "make-test-stick.sh failed: $(tail -n 2 "$RUN/make-test-stick.log" | tr '\n' ' ')"; return 0; }
-	img_regions "$DISK" > "$RUN/regions-0.txt"
-	fs_tree "$DISK" 6 "$RUN/tree0-usershare"
-	fs_tree "$DISK" 7 "$RUN/tree0-userdata"
-
-	st=$RUN/s11-stock.steps
-	steps_stock "$st"
-	boot s11-stock "$DISK" "$(spl_root "$DISK")" "$st" "$stick"
-	check "stock hook staged and jumped to root=/dev/sda2" is_eq "$(boot_outcome s11-stock)" chainload:/dev/sda2
-	cl=$(chainload_cmdline s11-stock)
-	check "cmdline: root=/dev/sda2" bash -c "printf '%s' \"\$1\" | grep -qE '(^|[: ])root=/dev/sda2( |$)'" _ "$cl"
-	check "cmdline: c5.usbtest=1" bash -c "printf '%s' \"\$1\" | grep -qE ' c5\.usbtest=1( |$)'" _ "$cl"
-	check "cmdline: c5.nocommit=1" bash -c "printf '%s' \"\$1\" | grep -qE ' c5\.nocommit=1( |$)'" _ "$cl"
-	check "stick: ATTEMPTED marker" bash -c "mdir -b -i '$stick@@1M' ::opencreator-os-test/ | grep -q ATTEMPTED"
-	check "stick: wifi.conf from usershare" bash -c "mtype -i '$stick@@1M' ::opencreator-os-test/wifi.conf | grep -q '^SSID='"
-	check "stick: hook.log says payload verified" bash -c "mtype -i '$stick@@1M' ::opencreator-os-test/hook.log | grep -q 'payload verified'"
-	sum0=$(sha256sum < "$DISK")
-
-	st=$RUN/s11-openwrt.steps
-	cat > "$st" <<'EOF'
-shell 400
-run 400 report i=0; until logread | grep -q 'c5-usbtest: report written'; do i=$((i+1)); [ $i -lt 200 ] || break; sleep 2; done; logread | grep 'c5-usbtest'
-run 30 cmdline cat /proc/cmdline
-run 30 mounts cat /proc/mounts
-run 30 rominfo grep ' /rom ' /proc/self/mountinfo; cat /sys/class/block/sda2/dev
-send sync; poweroff
-wait-exit 240
-EOF
-	if [ -n "$cl" ]; then
-		boot s11-openwrt "$DISK" "$cl" "$st" "$stick"
-	else
-		fatal "no chainload command line; OpenWrt boot skipped"
-	fi
-	sum1=$(sha256sum < "$DISK")
-	check "eMMC image byte-identical across the OpenWrt test boot (whole image sha256)" is_eq "$sum1" "$sum0"
-	check "c5-usbtest reported and unmounted the stick" res_has s11-openwrt report 'report written; stick unmounted'
-	check "/data is userdata, read-only" res_has s11-openwrt mounts '^/dev/mmcblk0p7 /data ext4 ro[, ]'
-	summary=$(stick_test_cat "$stick" openwrt/summary.txt)
-	printf '%s\n' "$summary" > "$RUN/summary.txt"
-	check "summary.txt ends with DONE" is_eq "$(printf '%s\n' "$summary" | tail -n 1)" DONE
-	for r in root overlay emmc data wifi-conf ipv4 ssh fpu; do
-		check "summary: PASS $r" bash -c "printf '%s\n' \"\$1\" | grep -qE '^PASS +$r '" _ "$summary"
-	done
-	say "  info: summary FAIL lines (expected in QEMU: no X2600 UARTs, GPIO, watchdog, Wi-Fi):$(printf '%s\n' "$summary" | awk '$1 == "FAIL" { printf " %s", $2 }')"
-	check "report has early/ and final/ snapshots" bash -c "mdir -b -i '$stick@@1M' ::opencreator-os-test/openwrt/ | grep -q early && mdir -b -i '$stick@@1M' ::opencreator-os-test/openwrt/ | grep -q final"
-
-	st=$RUN/s11-again.steps
-	steps_stock "$st"
-	boot s11-again "$DISK" "$(spl_root "$DISK")" "$st" "$stick"
-	check "second boot: hook.log says already attempted" bash -c "mtype -i '$stick@@1M' ::opencreator-os-test/hook.log | grep -q 'already attempted'"
-	check "second boot: stock continued, no chainload" is_eq "$(boot_outcome s11-again)" poweroff
-
-	local bad=$RUN/stick-s11-bad.img
-	make_test_stick "$bad" corrupt || { fatal "make-test-stick.sh failed (corrupt stick)"; return 0; }
-	st=$RUN/s11-bad.steps
-	steps_stock "$st"
-	boot s11-bad "$DISK" "$(spl_root "$DISK")" "$st" "$bad"
-	check "corrupt kernel.uimage: payload checksum mismatch" log_has s11-bad 'usbtest: payload checksum mismatch .*kernel\.uimage'
-	check "corrupt kernel.uimage: stock continued, no chainload" is_eq "$(boot_outcome s11-bad)" poweroff
-	check "corrupt kernel.uimage: no ATTEMPTED marker" bash -c "! mdir -b -i '$bad@@1M' ::opencreator-os-test/ | grep -q ATTEMPTED"
-
-	# Stock's own boot fscks and mounts usershare/userdata read-write, which
-	# updates their superblocks (mount count/time) on the printer too, so
-	# across stock boots those two are compared by content.
-	img_regions "$DISK" > "$RUN/regions-2.txt"
-	r0=$(grep -vE '^p[67] ' "$RUN/regions-0.txt") r2=$(grep -vE '^p[67] ' "$RUN/regions-2.txt")
-	check "whole flow: GPT, p1-p5 and backup GPT byte-identical" is_eq "$r2" "$r0"
-	fs_tree "$DISK" 6 "$RUN/tree2-usershare"
-	fs_tree "$DISK" 7 "$RUN/tree2-userdata"
-	check "whole flow: usershare files unchanged" diff -r --no-dereference "$RUN/tree0-usershare" "$RUN/tree2-usershare"
-	check "whole flow: userdata files unchanged" diff -r --no-dereference "$RUN/tree0-userdata" "$RUN/tree2-userdata"
-	r1=$(diff "$RUN/regions-0.txt" "$RUN/regions-2.txt" | sed -n 's/^> \(p[67]\) .*/\1/p' | tr '\n' ' ')
-	say "  info: raw bytes changed by stock's own fsck/mount: ${r1:-none}"
-}
-
 # ------------------------------------------------- os-installer protocol --
 
 # ui_stock_boot NAME STICKIMG [TIMEOUT]: stock boot with a --ui stick
@@ -705,6 +605,8 @@ scenario_S12() {
 	local before=$RUN/before.img stick=$RUN/stick-s12.img bk=$RUN/bk name sum got want n start size st
 	make_ui_payload "$RUN/payload-s12" "menu=1 confirm_backup=ok confirm_c5os=ok" --chainload ||
 		{ fatal "make-install-stick.sh failed: $(tail -n 2 "$RUN/make-install-stick.log" | tr '\n' ' ')"; return 0; }
+	printf "SSID='QEMU Stick Override'\nPSK='stick-override-123'\n" > "$RUN/payload-s12/opencreator-os/wifi.conf"
+	echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f qemu-fixture' > "$RUN/payload-s12/opencreator-os/authorized_keys"
 	make_stick "$RUN/payload-s12" "$stick" 3072
 	ui_stock_boot s12-stock "$stick" 2400
 	check "stock kernel: no valid backup GPT before the repartition" log_has s12-stock 'Alternate GPT is invalid'
@@ -756,19 +658,27 @@ scenario_S12() {
 	check "userdata file system grown to the new p7" bash -c "dumpe2fs -h '$(userdata_spec "$DISK")' 2>/dev/null | grep -qE '^Block count: +77824$'"
 	check "c5os is ext4 labelled c5os" bash -c "dumpe2fs -h '$(c5os_spec "$DISK")' 2>/dev/null | grep -qE '^Filesystem volume name: +c5os$'"
 	check "stock copy saved to userdata" data_has "$DISK" /opencreator-os/stock/SHA256SUMS
+	check "c5os stores hook model" is_eq "$(c5os_cat "$DISK" /opencreator-os/model)" "Creator5Pro 0029"
+	check "c5os preserves hand-written stick Wi-Fi override" is_eq "$(c5os_cat "$DISK" /opencreator-os/wifi.conf)" "$(cat "$RUN/payload-s12/opencreator-os/wifi.conf")"
+	check "c5os stores authorized keys" is_eq "$(c5os_cat "$DISK" /opencreator-os/authorized_keys)" "$(cat "$RUN/payload-s12/opencreator-os/authorized_keys")"
+	check "userdata does not store settings or model" bash -c "for f in model wifi.conf authorized_keys; do ! debugfs -R \"stat /opencreator-os/\$f\" '$(userdata_spec "$DISK")' 2>/dev/null | grep -q '^Inode:' || exit 1; done"
 
 	st=$RUN/s12-openwrt.steps
 	steps_openwrt "$st" <<'EOF'
 run 30 wificonf cat /etc/c5/wifi.conf
-run 30 fstab uci -q get fstab.data.device
+run 30 keys cat /etc/dropbear/authorized_keys
+run 30 model cat /etc/c5/model
+run 30 fstab uci -q get fstab.data.label
 EOF
 	boot s12-openwrt "$DISK" "$(chainload_cmdline s12-stock)" "$st"
-	check "OpenWrt: /data on c5os (fstab)" res_has s12-openwrt fstab '^/dev/mmcblk0p8'
+	check "OpenWrt: fixed c5os label in fstab" res_has s12-openwrt fstab '^c5os$'
 	check "OpenWrt: /data = mmcblk0p8" res_has s12-openwrt mounts '^/dev/mmcblk0p8 /data ext4'
 	check "OpenWrt kernel: backup GPT valid now" log_lacks s12-openwrt 'Alternate GPT is invalid'
 	check "OpenWrt committed slot 1 (flag ota:kernel)" is_eq "$(img_flag "$DISK")" ota:kernel
 	check "OpenWrt logs on c5os" c5os_has "$DISK" /opencreator-os/logs/dmesg-last.txt
-	check "wifi.conf imported" res_has s12-openwrt wificonf "^SSID='QEMU Test Net'"
+	check "stick Wi-Fi override imported" res_has s12-openwrt wificonf "^SSID='QEMU Stick Override'"
+	check "authorized keys imported from c5os" res_has s12-openwrt keys '^ssh-ed25519 .* qemu-fixture$'
+	check "model imported from c5os" res_has s12-openwrt model '^Creator5Pro 0029$'
 }
 
 # S13: refusals on a stock-layout printer: userdata too full (blocked before
@@ -797,6 +707,23 @@ scenario_S13() {
 		make_ui_payload "$RUN/payload-s13-$c" "menu=1 confirm_backup=cancel confirm_c5os=$c" || { fatal "make-install-stick.sh failed"; return 0; }
 		stick=$RUN/stick-s13-$c.img
 		make_stick "$RUN/payload-s13-$c" "$stick"
+		if [ "$c" = cancel ]; then
+			cat > "$RUN/unknown-model.sh" <<'EOF'
+mount -t vfat /dev/sda1 /mnt
+sync
+before=$(awk '{print $7}' /sys/block/mmcblk0/stat) || exit 1
+sh /mnt/opencreator-os/install.sh --from-stick /mnt --hook UnknownModel 9999 > /tmp/unknown-model.log 2>&1
+rc=$?
+sync
+after=$(awk '{print $7}' /sys/block/mmcblk0/stat) || exit 1
+cat /tmp/unknown-model.log
+echo "QEMU-MODEL-REFUSAL rc=$rc"
+echo "QEMU-MODEL-SECTORS-WRITTEN before=$before after=$after"
+[ "$before" -eq "$after" ] && echo QEMU-MODEL-NOTHING-WRITTEN
+umount /mnt
+EOF
+			data_put "$DISK" "$RUN/unknown-model.sh" /qemu-action.sh
+		fi
 		ui_stock_boot "s13-$c" "$stick"
 		stick_cat "$stick" opencreator-os-install.log | tr -d '\r' > "$RUN/s13-$c-install.log"
 		check "$c: backup skipped by the user" grep -q 'backup: skipped by the user' "$RUN/s13-$c-install.log"
@@ -806,6 +733,11 @@ scenario_S13() {
 		check "$c: aborted at c5os" grep -q 'abort: cancelled at c5os' "$RUN/s13-$c-install.log"
 		check "$c: GPT unchanged" is_eq "$(gpt_layout "$DISK")" "$base_gpt"
 		check "$c: p1/p2 untouched" is_eq "$(img_part_sum "$DISK" 1 $((PSIZE[1] * 512)))$(img_part_sum "$DISK" 2 $((PSIZE[2] * 512)))" "$BASE_P1$BASE_P2"
+		if [ "$c" = cancel ]; then
+			check "unknown hook model aborts" log_has "s13-$c" "^install: model mismatch: 'UnknownModel 9999'; nothing written"
+			check "unknown model returns failure" log_has "s13-$c" '^QEMU-MODEL-REFUSAL rc=1'
+			check "unknown model submits no eMMC writes" log_has "s13-$c" '^QEMU-MODEL-NOTHING-WRITTEN'
+		fi
 		check "$c: stock continued" log_has "s13-$c" '^QEMU-STOCK-HOOK continue'
 	done
 }
@@ -839,6 +771,13 @@ scenario_S14() {
 	check "nothing installed: swap refused" bash -c "mtype -i '$stick@@1M' ::opencreator-os-install.log | grep -q 'abort: swap: OpenWrt is not installed'"
 	check "nothing installed: flag unchanged" is_eq "$(img_flag_hex "$DISK")" "$(img_flag_hex "$C5OS_DISK")"
 	check "nothing installed: p1/p2 untouched" is_eq "$(img_part_sum "$DISK" 1 $((PSIZE[1] * 512)))$(img_part_sum "$DISK" 2 $((PSIZE[2] * 512)))" "$BASE_P1$BASE_P2"
+	new_disk
+	prepare_committed || return 0
+	printf 'ota:kernel2\n' | dd of="$DISK" bs=512 seek="${PSTART[5]}" conv=sync,notrunc status=none
+	flow_install s14-reinstall --chainload || return 0
+	check "same-build reinstall skips chainload test" log_has s14-reinstall 'chainload: kernel matches c5os good-kernel; test boot skipped'
+	check "same-build reinstall never chainloads" log_lacks s14-reinstall '^QEMU-CHAINLOAD '
+	check "same-build reinstall directly selects OpenWrt" is_eq "$(boot_outcome s14-reinstall):$(img_flag "$DISK")" reboot:ota:kernel
 }
 
-ALL_SCENARIOS="S1 S2 S3 S4 S5 S6 S7 S8 S9 S10 S11 S12 S13 S14"
+ALL_SCENARIOS="S1 S2 S3 S4 S5 S6 S7 S8 S9 S10 S12 S13 S14"
