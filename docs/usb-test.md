@@ -1,7 +1,7 @@
 # Zero-write USB test
 
 Boots OpenWrt on the printer from a USB stick without writing anything to
-the eMMC: no slot, no boot flag, no `userdata`. It checks the hardware
+the eMMC: no slot, no boot flag, no data partition. It checks the hardware
 bring-up of the 6.6 kernel before anything is installed.
 
 ## How it works
@@ -14,13 +14,14 @@ bring-up of the 6.6 kernel before anything is installed.
    The command line is stock's, with `root=/dev/sda2` (the squashfs on the
    stick's second partition), `c5.nocommit=1` and `c5.usbtest=1`.
 3. OpenWrt runs from the stick. With `c5.usbtest=1` it never writes the
-   eMMC: the boot flag, bootlog and stock-invalid writers refuse,
-   `userdata` is mounted read-only without journal replay or fsck, the USB
-   recovery hook is skipped, and the overlay lives on the stick after the
-   squashfs.
+   eMMC: the boot flag, bootlog and stock-invalid writers refuse, `/data` is
+   mounted read-only without journal replay or fsck (`c5os`, or `userdata`
+   on a printer the installer has not repartitioned yet), the USB recovery
+   hook is skipped, and the overlay lives on the stick after the squashfs.
 4. `c5-usbtest` writes `opencreator-os-test/openwrt/` to the stick (system
    state right after boot and again once Wi-Fi has an address, at most
-   180 s later, plus `summary.txt`) and unmounts the stick.
+   180 s later, plus `summary.txt`, which also has an `INFO c5os present`
+   or `absent` line that is not a check) and unmounts the stick.
 5. The user cuts the power. Stock boots; the hook sees `ATTEMPTED` and lets
    stock continue, so the test runs once per stick.
 

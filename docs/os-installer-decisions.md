@@ -55,7 +55,10 @@ Not a spec. Labels: **Observed** (seen on the printer or in a stock file),
 - **Decided:** the repartition runs under stock (the only system with a working
   display), from the USB hook, before OpenWrt is installed. Stock has
   `resize2fs`, `e2fsck`, `mkfs.ext4` and `partprobe`; it has no GPT editor, so
-  the stick carries a static `sgdisk`.
+  the stick carries static util-linux `sfdisk` (GPT rewrite, backup header at
+  the disk end) and `partx` (tells the kernel through `BLKPG`), built by
+  `installer/tools/build.sh`. If the kernel still shows the old table, the
+  installer reboots once and continues.
 - **Decided:** PC demo = the SDL build under WSLg running the real backend
   against a sparse disk image laid out like the printer's eMMC, through the
   backend's path overrides (`C5_DISK`, `C5_SYSBLOCK`, `C5_CMDLINE`, ...).

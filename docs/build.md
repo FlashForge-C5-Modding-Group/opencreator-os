@@ -28,8 +28,20 @@ export INGENIC_FTP_PASS=...
 cd /mnt/f/creator5-dev/opencreator/opencreator-os
 ./build.sh                      # OpenWrt image (kernel.uimage, root.squashfs, sysupgrade.tar)
 chainload/build.sh              # chainload.ko for the stock 5.10 kernel
-tools/make-install-stick.sh /mnt/f/creator5-dev/opencreator-os-builds/<version> /tmp/stick
+installer/tools/build.sh        # static util-linux sfdisk + partx for the install stick
+(cd ../os-installer && make mips32)   # touchscreen app (optional on the stick)
+tools/make-install-stick.sh --app ../os-installer/build/mips32/os-installer \
+    /mnt/f/creator5-dev/opencreator-os-builds/<version> /tmp/stick
 ```
+
+`installer/tools/build.sh` downloads util-linux 2.40.2 (checksum pinned) and
+builds it with the Ingenic toolchain (`TC`, default
+`~/ing/mips-xburst2-linux-toolchain-r6.0.0`) into `installer/tools/out/`;
+`make-install-stick.sh` refuses to run without it. The app lives in the
+separate `os-installer` repository (`make mips32` for the printer, `make sdl`
+for the PC). `tools/ui-demo.sh APP VERSION_DIR` runs the SDL build under WSLg
+against the real installer and a loop-mounted image laid out like the
+printer's eMMC (needs sudo; a backup in the demo writes about 7.3 GB).
 
 `build.sh` clones OpenWrt v24.10.3 into `$WORK/openwrt`, links
 `feed/x2600` as `target/linux/x2600`, installs the package feeds, unpacks the
