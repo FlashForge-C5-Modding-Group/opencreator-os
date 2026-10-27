@@ -26,8 +26,10 @@ Not a spec. Labels: **Observed** (seen on the printer or in a stock file),
   - nothing is placed past sector 15,065,087 until that area is understood.
   - p1 to p6 are never moved or resized.
 - **Decided:** OpenWrt keeps `/etc` in its slot overlay. Packages, Klipper,
-  Moonraker, logs and gcode go on `c5os`. `userdata` is mounted only to read
-  stock's Wi-Fi settings and the saved stock images.
+  Moonraker, logs and gcode go on `c5os`. The installer saves Wi-Fi settings,
+  optional SSH keys and the model on `c5os`; preinit imports them before
+  uci-defaults. `userdata` holds the saved stock images and staged chainload
+  kernel and is mounted only briefly by OpenWrt.
 
 ## Installer
 
@@ -52,8 +54,9 @@ Not a spec. Labels: **Observed** (seen on the printer or in a stock file),
   - the eMMC backup is an installer step, written to the USB stick and
     verified before anything on the eMMC is written. It must include
     `userdata` while it is still full size.
-- **Decided:** the repartition runs under stock (the only system with a working
-  display), from the USB hook, before OpenWrt is installed. Stock has
+- **Decided:** the repartition runs under stock, from the USB hook, before
+  OpenWrt is installed. OpenWrt's display bring-up is not hardware-verified;
+  use headless installer actions there for now. Stock has
   `resize2fs`, `e2fsck`, `mkfs.ext4` and `partprobe`; it has no GPT editor, so
   the stick carries static util-linux `sfdisk` (GPT rewrite, backup header at
   the disk end) and `partx` (tells the kernel through `BLKPG`), built by
@@ -64,6 +67,17 @@ Not a spec. Labels: **Observed** (seen on the printer or in a stock file),
   backend's path overrides (`C5_DISK`, `C5_SYSBLOCK`, `C5_CMDLINE`, ...).
   The jump into OpenWrt is not part of the demo (QEMU covers it).
   `libsdl2-dev` (2.30.0) is installed in WSL.
+- **Decided:** the same install stick runs from OpenWrt's boot-time USB hook.
+  Its actions are "Update OpenWrt", "Swap to stock" and "Repair stock";
+  headless operation reads `opencreator-os/ACTION`. No action file on
+  headless OpenWrt means no action; stock still defaults to install.
+- **Decided:** only the exact model pairs `Creator5 0028` and
+  `Creator5Pro 0029` are accepted; other pairs are refused before writes.
+- **Decided:** normal OpenWrt boots keep the flag on OpenWrt. Three failed
+  boots reaching preinit trigger stock fallback on the next attempt if stock
+  is selectable; START=99 with `/data` mounted resets the counter. Only a
+  matching `pending-commit` permits the health service to change the flag.
+  Hardware watchdog feeding is handled by procd, not a separate daemon.
 
 ## Open questions for the design
 

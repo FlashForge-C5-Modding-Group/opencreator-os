@@ -77,7 +77,15 @@ describe`), and runs `make`. Options: `--menuconfig`, `--kernel-menuconfig`,
 - Symbol names checked in the tree: SDK Ethernet `CONFIG_INGENIC_MAC`, SDK
   watchdog `CONFIG_INGENIC_WDT`, eMMC `CONFIG_MMC_SDHCI_INGENIC`, RISC-V core
   remoteproc node `ingenic,x2600-riscv-rproc` (under `CONFIG_REMOTEPROC`),
-  dev-board Wi-Fi `CONFIG_BCMDHD`, touch `CONFIG_TOUCHSCREEN_GT9XX`.
+  dev-board Wi-Fi `CONFIG_BCMDHD`, upstream Goodix touch
+  `CONFIG_TOUCHSCREEN_GOODIX`.
+- `CONFIG_WATCHDOG=y`, `CONFIG_INGENIC_WDT=y` and the enabled watchdog DTS
+  node provide `/dev/watchdog`; procd opens and feeds it without a separate
+  service. Watchdog operation has not been verified on hardware.
+- Display/touch bring-up is in progress. Even with the framebuffer and
+  Goodix drivers configured, use the installer headless on OpenWrt until
+  display bring-up is verified on hardware; the stock touchscreen flow is
+  separate.
 
 ### Regenerating `feed/x2600/config-6.6`
 

@@ -1,13 +1,14 @@
 # opencreator-os
 
-OpenWrt-based replacement for the stock Linux on the FlashForge Creator 5 Pro
-(Ingenic X2600 host SoC), installed into the spare eMMC boot slot while the
-stock system stays in the other slot.
+OpenWrt-based replacement for the stock Linux on the FlashForge Creator 5
+and Creator 5 Pro (Ingenic X2600 host SoC), installed into the spare eMMC
+boot slot while the stock system stays in the other slot.
 
-Status: builds and passes the QEMU system tests (`test/qemu/run.sh`); not
-yet run on a printer.
+Status: hardware bring-up in progress. The boot safety and installer changes
+described here are not yet validated on a printer; see `test/qemu/run.sh`
+for the system tests. OpenWrt-side installation is headless until display
+bring-up is verified on hardware.
 
-- `docs/usb-test.md`: zero-write test boot from a USB stick (first step)
 - `docs/install.md`: backup, install, test boot, going back to stock
 - `docs/recovery.md`: safety mechanisms and every failure case
 - `docs/build.md`: building in WSL

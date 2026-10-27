@@ -25,8 +25,9 @@ one. Image limits: kernel uImage ≤ 8 MiB, root squashfs ≤ 100 MiB.
 
 The installer changes this layout once (not an observation): it shrinks
 `userdata` to 2,018 MiB and adds `c5os` (mmcblk0p8, 4,096 MiB, ext4) after
-it, ending at the GPT's last usable sector 15,065,087. OpenWrt mounts `c5os`
-at `/data`; on a printer without `c5os` it mounts `userdata` there instead.
+it, ending at the GPT's last usable sector 15,065,087. OpenWrt's fixed fstab
+mounts the ext4 filesystem labelled `c5os` at `/data` (`rw,noatime`); there
+is no fallback mount of `userdata`.
 
 ## Bootloader (Observed; behaviour Confirmed with the stock OTA scripts)
 

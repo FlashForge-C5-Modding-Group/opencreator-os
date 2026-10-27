@@ -2,9 +2,10 @@
 
 Everything happens through USB sticks: build a stick on the PC, copy it to
 the root of a FAT32 stick, insert it with the printer off, power on. Stock
-runs `runFirmwareExe.sh` from the stick before its UI. Nothing needs a
-network, SSH or a serial cable. Remove the stick after each step; otherwise
-it runs again on the next boot.
+runs `runFirmwareExe.sh` from the stick before its UI; OpenWrt has its own
+boot-time USB hook for the same stick. Nothing needs a network, SSH or a
+serial cable. Remove the stick after each step; otherwise its selected
+action can run again on the next boot.
 
 Do not put opencreator-fs's `runFirmwareExe.sh` on the same stick.
 Never apply a FlashForge firmware update while OpenWrt is installed: stock's
@@ -39,27 +40,38 @@ Copy `/tmp/stick/*` to a FAT32 stick and boot with it. For the eMMC backup
 below the stick needs about 8 GB free. The stick holds:
 
 ```
-runFirmwareExe.sh                      stock's USB hook
-opencreator-os/install.sh, lib.sh, switch-to-openwrt.sh
+runFirmwareExe.sh                      stock / OpenWrt USB hook
+opencreator-os/install.sh, lib.sh
 opencreator-os/bin/sfdisk, bin/partx   static util-linux (installer/tools/build.sh)
 opencreator-os/os-installer            touchscreen app (--app; optional)
 opencreator-os/CHAINLOAD or FLIP, opencreator-os/authorized_keys   (options)
+opencreator-os/ACTION                  optional headless action
 kernel.uimage root.squashfs sysupgrade.tar VERSION chainload/ SHA256SUMS MD5SUMS
 ```
 
 `runFirmwareExe.sh` copies `opencreator-os/` to `/tmp/c5os` and runs the
-installer from there. With `os-installer` on the stick it loads the touch
-driver and starts the app, which runs `install.sh --ui` and draws the screens
-the installer asks for. Without the app, or when the app finds no display or
-touchscreen, `install.sh` runs headless (see below).
+installer from there. With `os-installer` on the stick it loads stock's touch
+driver when present and starts the app, which runs `install.sh --ui` and
+draws the screens the installer asks for. Without the app, or when the app
+finds no display or touchscreen, `install.sh` runs headless (see below).
+**Use headless actions on OpenWrt until display bring-up is verified on
+hardware; no OpenWrt screen is promised.** The changes described here have
+not been validated on a printer.
+
+The installer accepts only `Creator5:0028` and `Creator5Pro:0029` (passed
+as two arguments, e.g. `Creator5Pro 0029`). Both USB hooks supply these
+arguments. A manual stock run without arguments reads literal `MACHINE=`
+and `PID=` values from `/usr/prog/app_startup.sh`, without executing it.
+Other or missing pairs are refused before writes; `--check` prints the
+detected pair.
 
 ### Touchscreen flow
 
-1. **Checking the printer.** The payload checksums, the partition table, the
-   running slot, the boot flag, the image sizes, the disk layout and the space
-   on `/usr/data`. Nothing is written yet; a failed check ends with "Nothing
-   was written". If stock's data would not fit the shrunk `userdata`, a
-   screen "Please free N MB on /usr/data" stays up without buttons:
+1. **Checking the printer.** The model, payload checksums, the partition
+   table, the running slot, the boot flag, the image sizes, the disk layout
+   and the space on `/usr/data`. Nothing is written yet; a failed check ends
+   with "Nothing was written". If stock's data would not fit the shrunk
+   `userdata`, a screen "Please free N MB on /usr/data" stays up without buttons:
    power-cycle without the stick, delete files from `/usr/data` (stock UI or
    SSH) and try again.
 2. **Menu.** "Install / update opencreator-os", "Swap to OpenWrt" or "Swap to
@@ -77,45 +89,81 @@ touchscreen, `install.sh` runs headless (see below).
       the installer continues on the next boot; leave the stick in. Later
       runs find `c5os` and skip this step.
    3. It saves the running stock kernel and rootfs to
-      `/usr/data/opencreator-os/stock/` and imports stock's Wi-Fi settings.
+      `/usr/data/opencreator-os/stock/`. It saves stock's Wi-Fi settings,
+      optional stick `authorized_keys`, the model and `pending-commit` on
+      `c5os` in `opencreator-os/`. A hand-written stick
+      `opencreator-os/wifi.conf` takes precedence over stock's Wi-Fi.
    4. It writes OpenWrt into the slot stock is not running from and reads it
       back.
    5. With `--chainload` it test-boots that OpenWrt from RAM
-      (`chainload.ko`). The boot flag still points at stock. Without
+      (`chainload.ko`), leaving the boot flag on stock until the healthy boot
+      commits it. If the kernel matches `c5os`'s `good-kernel`, the RAM test
+      is skipped and the flag can point directly at OpenWrt instead. Without
       `--chainload` or `--flip` it ends on "OpenWrt written to slot N" and
       stock boots on after "Continue".
 4. **Swap.** From stock with OpenWrt installed: points the boot flag at
    OpenWrt and reboots into it. When the flag points at OpenWrt: points it
    back at stock, and stock keeps booting.
 
-After a test boot, OpenWrt joins your Wi-Fi. If within 120 s it has an IPv4
-address and SSH is listening, and the kernel it runs is the one in its slot,
-it points the boot flag at itself. SSH in as `root` (password
-`FlashForge2026`, or the key you shipped). `c5-slot status` shows the slots,
-the flag and the boot log.
+After a test boot, OpenWrt imports the saved settings in preinit, before
+uci-defaults, and attempts to join your Wi-Fi. Reaching START=99 with
+`/data` mounted is healthy; there is no IPv4, SSH-listener or Wi-Fi timeout
+gate. With its own slot's kernel and a matching `pending-commit`, the health
+service points the flag at OpenWrt and removes the marker. Normal healthy
+boots only reset the failed-boot counter and record `good-kernel`.
 
-If anything goes wrong at any point up to that, power-cycle: stock boots.
-The installer logs to `opencreator-os-install.log` on the stick and to
-`/usr/data/opencreator-os/install.log`; the app logs every line it got to
-`os-installer.log` on the stick.
+SSH in as `root`, password `FlashForge2026`; **no key is needed**.
+`authorized_keys` on the stick is optional. The model sets the initial
+hostname to `creator5` or `creator5pro` (missing model defaults to
+`creator5pro`).
 
-`--flip` instead of `--chainload` points the flag at OpenWrt without the RAM
-test. It skips the only test of the new kernel before the bootloader runs
-it, so do not use it for a new kernel.
+If a new-kernel test boot fails before it commits, power-cycle: stock boots.
+Lack of Wi-Fi alone does not prevent a commit. The installer logs to
+`opencreator-os-install.log` on the stick and to
+`/usr/data/opencreator-os/install.log` under stock; the app logs to
+`os-installer.log` on the stick. See `recovery.md` for boot-log commands.
+
+`--flip` also requires a RAM test for a changed kernel. It only skips that
+test when the kernel matches the recorded `good-kernel`.
 
 ### Headless stick
 
-A stick without `os-installer` shows no screens and never makes the backup.
-It cannot create `c5os` either: on a printer without `c5os` it stops with
-`abort: confirm c5os: no display and no --yes` and writes nothing. Use the
-app for the first install; afterwards a headless stick installs and updates
-as before. Over SSH to stock,
+A stick without `os-installer` shows no screens. Headless stock skips the
+backup unless run with `--backup`, and refuses to create `c5os` unless
+`--yes` was supplied (`abort: confirm c5os: no display and no --yes`).
+Use the app for the first install; afterwards a headless stick can update
+or swap slots. Over SSH to stock,
 `sh /mnt/opencreator-os/install.sh --from-stick /mnt --check` prints the plan
 and writes nothing; on an untouched printer it includes
 `check: c5os: would create (userdata 5828 MiB -> 2018 MiB, c5os 4096 MiB at sector 6676480)`,
 afterwards `check: c5os: present`. The other options (`--yes`,
-`--action install|swap`, `--backup`, `--ui`, `--hook`) are listed by
-`install.sh --help`.
+`--action install|swap|repair-stock|update`, `--backup`, `--ui`, `--hook`) are
+listed by `install.sh --help`; stock accepts only `install` and `swap`.
+
+For headless operation, put one word in `opencreator-os/ACTION` on the
+stick: `install`, `swap`, `repair-stock` or `update` (Windows line endings
+are accepted). An explicit `--action` overrides the file. With no action
+file, stock defaults to `install`, but OpenWrt does nothing.
+
+### The same stick on OpenWrt
+
+At boot, `c5-usb-hook` (START=19) mounts the first FAT USB candidate
+read-write at `/mnt`, runs its `runFirmwareExe.sh` with the model stored in
+`/data/opencreator-os/model`, and unmounts it when the hook returns.
+Missing or invalid stored model means no hook; see `logread -e c5-usb-hook`.
+For now omit `--app` when building a stick for headless OpenWrt use.
+
+The backend offers these actions (menu labels apply when a display works):
+
+| Menu | Headless `ACTION` | What it does |
+|------|-------------------|--------------|
+| Update OpenWrt | `update` | Checks `sysupgrade.tar` against the stick's `SHA256SUMS`, runs `sysupgrade -T`, then `sysupgrade` with configuration kept. |
+| Swap to stock | `swap` | Refuses unselectable stock; clears `pending-commit`, resets the counter, selects stock and reboots. |
+| Repair stock | `repair-stock` | Checks and restores the saved stock slot from `userdata` (`/usr/data/opencreator-os/stock/` on stock), reads it back, then selects stock and reboots only if selectable. |
+
+There is no uninstall action on OpenWrt: it cannot wipe its own slot.
+Repair does not restore `usershare`, and it does not take stock images from
+the stick; see `recovery.md` if the saved copy is lost.
 
 ### eMMC backup on the stick
 
@@ -146,33 +194,42 @@ from before the first install, is refused on a printer that has `c5os`:
 `restore.sh` compares the partition table with the backup's `partmap.txt`
 and stops with `the backup was taken from a different partition layout`.
 The slot, `ota` and `usershare` images in it are still valid, because those
-partitions never move; write them with the OpenWrt-side recovery stick or
-over SSH (`recovery.md`). Its `userdata.img` is larger than the shrunk
-`userdata` and cannot be written back. For a restore stick that works after
-the repartition, take a new backup with section 1's stick afterwards.
+partitions never move; use the OpenWrt repair path for the saved stock slot,
+or restore from the PC backup over SSH (`recovery.md`). Its `userdata.img`
+is larger than the shrunk `userdata` and cannot be written back. For a
+restore stick that works after the repartition, take a new backup with
+section 1's stick afterwards.
 
 ## 3. Later boots
 
-Every boot of OpenWrt points the flag back at stock early in preinit and at
-itself again once healthy. A boot that dies after preinit returns to stock
-on the next power cycle. A kernel that dies before preinit cannot be caught
-this way; see failure case 7 in `recovery.md`.
+Normal OpenWrt boots leave the boot flag on OpenWrt. Early preinit increments
+a counter in `ota`; after three consecutive failed boots that reached
+preinit, the next attempt selects stock and reboots, provided stock is
+selectable. Healthy boots (START=99 with `/data` mounted) reset the counter.
+A kernel that dies before preinit cannot advance it. The built-in hardware
+watchdog is fed by procd through `/dev/watchdog`; no extra watchdog daemon
+is used. These safety changes are not hardware-verified.
 
-On OpenWrt, `/data` is `c5os`: logs, `pending-commit`, `sysupgrade.tgz` and
-`tryboot-fail-test` live in `/data/opencreator-os/`. OpenWrt mounts `userdata`
-only briefly, at `/tmp/c5-userdata`, to read stock's Wi-Fi settings, the
-shipped `authorized_keys` and the saved stock images, and to store the kernel
-stock's `c5-chainload.sh` stages after a sysupgrade. On a printer without
-`c5os` (the USB test before any install) `/data` is `userdata`.
+The fixed `/etc/config/fstab` mounts ext4 label `c5os` at `/data` with
+`rw,noatime`, with no `userdata` fallback. `/data/opencreator-os/` holds
+`model`, `wifi.conf`, optional `authorized_keys`, `good-kernel`,
+`pending-commit`, `sysupgrade.tgz` and `logs/`. Preinit imports settings
+only from `c5os` into `/etc/c5/` and `/etc/dropbear/` if the destination is
+not already populated. It also stages the saved sysupgrade configuration.
+OpenWrt mounts `userdata` only briefly to repair stock or stage a changed
+kernel for stock's `c5-chainload.sh`.
 
-`sysupgrade` writes the other slot, keeps the flag on stock and records the
-new image; it becomes the default only after it has booted healthy once.
+`sysupgrade` writes the OpenWrt slot from RAM, never the stock slot. If the
+new kernel's SHA-256 matches `good-kernel`, it keeps the flag on OpenWrt and
+needs no pending commit or chainload. Otherwise it leaves the flag on stock,
+stores the new chainload kernel on `userdata` and `pending-commit` on
+`c5os`; a healthy test boot with that slot's own kernel commits it.
 
 ## 4. Going back to stock
 
-- `c5-slot boot-stock` (flag only) or `c5-restore-stock` (rewrites stock's
-  slot from the saved copy first), then reboot.
-- Without network: the OpenWrt-side recovery stick (`recovery.md`).
+- Boot with the install stick and `opencreator-os/ACTION` containing `swap`.
+  If stock is damaged, use `repair-stock` instead; it restores the saved
+  stock slot before rebooting. Both actions also work headless, without SSH.
 - To remove OpenWrt from the spare slot: a restore stick from a backup whose
   `partmap.txt` matches the printer (see "Backups and the repartition"),
   `tools/make-restore-stick.sh <backup> /tmp/restore --slot1`. "Uninstall" is
