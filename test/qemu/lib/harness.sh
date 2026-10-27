@@ -8,6 +8,7 @@ FIX=$QWORK/fixtures
 STOCK_SQFS=$FIX/stock-rootfs.squashfs
 STOCK_KERNEL=$FIX/stock-kernel.uimage
 BASE_DISK=$FIX/base-disk.img
+C5OS_DISK=$FIX/c5os-disk.img
 OWRT_SQFS=$FIX/openwrt-root.squashfs
 QEMU_ROOT_PASSWORD=${QEMU_ROOT_PASSWORD:-FlashForge2026}
 export QEMU_ROOT_PASSWORD
@@ -55,6 +56,17 @@ data_put() { # DISK LOCALFILE PATH (parent directory must exist)
 	debugfs -w -R "write $2 $3" "$(userdata_spec "$1")" 2>&1 | grep -q 'Allocated inode' 
 }
 data_mkdir() { debugfs -w -R "mkdir $2" "$(userdata_spec "$1")" >/dev/null 2>&1; }
+
+# the same for c5os (p8, repartitioned images only)
+c5os_spec() { echo "$1?offset=$(poff 8)"; }
+c5os_cat() { debugfs -R "cat $2" "$(c5os_spec "$1")" 2>/dev/null; }
+c5os_has() { debugfs -R "stat $2" "$(c5os_spec "$1")" 2>/dev/null | grep -q '^Inode:'; }
+c5os_rm() { debugfs -w -R "rm $2" "$(c5os_spec "$1")" >/dev/null 2>&1; }
+c5os_put() { # DISK LOCALFILE PATH (parent directory must exist)
+	debugfs -w -R "rm $3" "$(c5os_spec "$1")" >/dev/null 2>&1
+	debugfs -w -R "write $2 $3" "$(c5os_spec "$1")" 2>&1 | grep -q 'Allocated inode'
+}
+c5os_mkdir() { debugfs -w -R "mkdir $2" "$(c5os_spec "$1")" >/dev/null 2>&1; }
 
 # OpenWrt overlay (fstools rootfs_data) inside slot N's rootfs partition
 squashfs_used() { # FILE|DISK [OFFSET] -> bytes_used
@@ -108,20 +120,49 @@ build_stock_fixture() {
 	rm -f "$BASE_DISK"
 }
 
-# 2 GiB eMMC image with the printer's GPT; stock in both slots (as after a
-# stock OTA), flag on slot 2, usershare with a Wi-Fi config, empty userdata.
-build_base_disk() {
-	local d st u
-	[ -s "$BASE_DISK" ] && return 0
-	echo "fixture: building the eMMC base image" >&2
-	d=$BASE_DISK.tmp
+# make_emmc_image IMG SECTORS QUIRK_LAST P7_LAST: eMMC image with the
+# printer's GPT; stock in both slots (as after a stock OTA), flag on slot 2,
+# usershare with a Wi-Fi config, empty userdata ending at P7_LAST. The
+# primary header is patched like the printer's: last usable LBA = alternate
+# LBA = QUIRK_LAST, protective MBR sized to QUIRK_LAST, no backup GPT (last
+# 33 sectors zero). MBR boot code and the SPL area (LBA 34..2047) get a
+# recognisable pattern so tests can prove a repartition keeps them.
+make_emmc_image() {
+	local d=$1 sectors=$2 quirk=$3 p7last=$4 st
 	rm -f "$d"
-	truncate -s $((DISK_SECTORS * 512)) "$d"
+	truncate -s $((sectors * 512)) "$d"
 	sgdisk -o --resize-table=8 \
 		-n 1:2048:18431 -c 1:kernel -n 2:18432:223231 -c 2:rootfs \
 		-n 3:223232:239615 -c 3:kernel2 -n 4:239616:444415 -c 4:rootfs2 \
 		-n 5:444416:446463 -c 5:ota -n 6:446464:2543615 -c 6:usershare \
-		-n 7:2543616:0 -c 7:userdata "$d" >/dev/null
+		-n 7:2543616:"$p7last" -c 7:userdata \
+		-t 1:0700 -t 2:0700 -t 3:0700 -t 4:0700 -t 5:0700 -t 6:0700 -t 7:0700 "$d" >/dev/null || return 1
+	python3 - "$d" "$quirk" "$sectors" <<'EOF' || return 1
+import struct, sys, zlib
+path, quirk, sectors = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+with open(path, 'r+b') as f:
+    f.seek(512)
+    h = bytearray(f.read(512))
+    assert h[:8] == b'EFI PART'
+    struct.pack_into('<Q', h, 32, quirk)   # alternate_lba
+    struct.pack_into('<Q', h, 40, 34)      # first_usable_lba (sgdisk: 4 for 8 entries)
+    struct.pack_into('<Q', h, 48, quirk)   # last_usable_lba
+    size = struct.unpack_from('<I', h, 12)[0]
+    struct.pack_into('<I', h, 16, 0)
+    struct.pack_into('<I', h, 16, zlib.crc32(bytes(h[:size])) & 0xffffffff)
+    f.seek(512)
+    f.write(h)
+    f.seek(0)
+    mbr = bytearray(f.read(512))
+    struct.pack_into('<I', mbr, 458, quirk)  # protective entry size_in_lba
+    mbr[0:55] = bytes((0x5a + i) & 0xff for i in range(55))  # "boot code"
+    f.seek(0)
+    f.write(mbr)
+    f.seek(34 * 512)
+    f.write(bytes((i * 7 + 3) & 0xff or 1 for i in range((2048 - 34) * 512)))  # "SPL"
+    f.seek((sectors - 33) * 512)
+    f.write(bytes(33 * 512))
+EOF
 	for p in 1 3; do dd if="$STOCK_KERNEL" of="$d" bs=512 seek="${PSTART[$p]}" conv=notrunc status=none; done
 	for p in 2 4; do dd if="$STOCK_SQFS" of="$d" bs=512 seek="${PSTART[$p]}" conv=notrunc status=none; done
 	printf 'ota:kernel2\n' | dd of="$d" bs=512 seek="${PSTART[5]}" conv=notrunc,sync status=none
@@ -141,12 +182,65 @@ network={
 	key_mgmt=WPA-PSK
 }
 EOF
-	u=$(sgdisk -i 7 "$d" | sed -n 's/^Last sector: \([0-9]*\).*/\1/p')
 	MKE2FS_CONFIG=$FIX/stock-stage/etc/mke2fs.conf mkfs.ext4 -q -F -L usershare -d "$st" \
-		-E offset="$(poff 6)" "$d" $((PSIZE[6] / 2))k
+		-E offset="$(poff 6)" "$d" $((PSIZE[6] / 2))k || return 1
 	MKE2FS_CONFIG=$FIX/stock-stage/etc/mke2fs.conf mkfs.ext4 -q -F -L userdata \
-		-E offset="$(poff 7)" "$d" $(((u + 1 - PSTART[7]) / 2))k
-	mv "$d" "$BASE_DISK"
+		-E offset="$(poff 7)" "$d" $(((p7last + 1 - PSTART[7]) / 2))k
+}
+
+# 2 GiB stock-layout image (before the installer's repartition). Rebuilt
+# when the image recipe changes.
+build_base_disk() {
+	local key
+	key=$({ cat "$STOCK_SQFS.key"; declare -f make_emmc_image host_c5os_script build_c5os_disk; echo "$DISK_SECTORS $GPT_QUIRK_LAST ${PSTART[*]} ${PSIZE[*]}"; } | sha256sum | cut -c1-16)
+	if [ -s "$BASE_DISK" ] && [ "$(cat "$BASE_DISK.key" 2>/dev/null)" = "$key" ]; then
+		build_c5os_disk
+		return
+	fi
+	echo "fixture: building the eMMC base image" >&2
+	rm -f "$C5OS_DISK"
+	make_emmc_image "$BASE_DISK.tmp" "$DISK_SECTORS" "$GPT_QUIRK_LAST" "$GPT_QUIRK_LAST" || return 1
+	mv "$BASE_DISK.tmp" "$BASE_DISK"
+	echo "$key" > "$BASE_DISK.key"
+	build_c5os_disk
+}
+
+# host_c5os_script DISK C5OS_START C5OS_SIZE: the sfdisk script the
+# installer's make_c5os writes (install.sh c5os_script): backup GPT at the
+# disk end, p7 shrunk to end before C5OS_START, p8 c5os with p7's type.
+host_c5os_script() {
+	local disk=$1 start=$2 size=$3 sectors
+	sectors=$(($(stat -c %s "$disk") / 512))
+	sfdisk --dump "$disk" 2>/dev/null | awk -v last=$((sectors - 34)) -v start="$start" -v size="$size" -v dev="$disk" '
+		/^(label|label-id|device|unit|first-lba|sector-size):/ { print; next }
+		/^last-lba:/ { print "last-lba: " last; next }
+		/^table-length:/ { tl = 1; print; next }
+		/^[^ ]+ *: *start=/ {
+			if (!tl) { print "table-length: 8"; tl = 1 }
+			n++
+			if (n == 7) {
+				p7s = $0; sub(/.*start= */, "", p7s); sub(/,.*/, "", p7s)
+				sub(/size= *[0-9]+/, "size=" (start - p7s))
+				t = $0; sub(/.*type= */, "", t); sub(/,.*/, "", t); type = t
+			}
+			print; next
+		}
+		END { print dev "p8 : start=" start ", size=" size ", type=" type ", name=\"c5os\"" }'
+}
+
+# The base image after the installer's repartition (userdata shrunk, c5os).
+build_c5os_disk() {
+	local d=$C5OS_DISK.tmp
+	[ -s "$C5OS_DISK" ] && return 0
+	echo "fixture: building the repartitioned eMMC image" >&2
+	cp --sparse=always "$BASE_DISK" "$d"
+	host_c5os_script "$d" "${PSTART[8]}" "${PSIZE[8]}" > "$FIX/c5os.sfdisk"
+	sfdisk -q --force "$d" < "$FIX/c5os.sfdisk" >/dev/null 2>&1 || { echo "fixture: sfdisk failed" >&2; return 1; }
+	MKE2FS_CONFIG=$FIX/stock-stage/etc/mke2fs.conf mkfs.ext4 -q -F -L userdata \
+		-E offset="$(poff 7)" "$d" $((PSIZE[7] / 2))k || return 1
+	MKE2FS_CONFIG=$FIX/stock-stage/etc/mke2fs.conf mkfs.ext4 -q -F -L c5os \
+		-E offset="$(poff 8)" "$d" $((PSIZE[8] / 2))k || return 1
+	mv "$d" "$C5OS_DISK"
 }
 
 # OpenWrt root used by the tests: the build's root.squashfs, by default with
@@ -205,6 +299,21 @@ make_payload() {
 	resum "$out"
 }
 
+# make_ui_payload OUTDIR "KEY=VALUE ..." [make-install-stick.sh options]:
+# make_payload, with the stick hook replaced by fixtures/qemu-ui-hook.sh,
+# which runs the installer with --ui against fixtures/fake-ui.sh configured
+# by the given ui.conf settings (menu=N, confirm_<id>=ok|early|cancel).
+make_ui_payload() {
+	local out=$1 conf=$2
+	shift 2
+	make_payload "$out" "$@" || return 1
+	mkdir -p "$out/qemu"
+	install -m 0755 "$QDIR/fixtures/fake-ui.sh" "$out/qemu/fake-ui.sh"
+	printf '%s\n' $conf > "$out/qemu/ui.conf"
+	install -m 0755 "$QDIR/fixtures/qemu-ui-hook.sh" "$out/runFirmwareExe.sh"
+	resum "$out"
+}
+
 # fixtures/fake-c5-chainload.sh with the repo's chainload/c5-chainload.sh
 # embedded as function c5cl_real (used for its "args" computation)
 fake_chainload() {
@@ -226,13 +335,14 @@ resum() { # DIR: recompute SHA256SUMS/MD5SUMS over the files they list
 		mv SHA256SUMS.new SHA256SUMS && mv MD5SUMS.new MD5SUMS)
 }
 
-# make_stick DIR IMG: FAT32 stick image, one MBR partition (/dev/sda1)
+# make_stick DIR IMG [SIZE_MB]: FAT32 stick image (default 256 MiB), one MBR
+# partition (/dev/sda1)
 make_stick() {
-	local img=$2
+	local img=$2 mb=${3:-256}
 	rm -f "$img"
-	truncate -s 256M "$img"
+	truncate -s "${mb}M" "$img"
 	echo '2048,,c' | sfdisk -q "$img" >/dev/null
-	mkfs.vfat -F 32 -n C5STICK --offset 2048 "$img" $((256 * 1024 - 1024)) >/dev/null
+	mkfs.vfat -F 32 -n C5STICK --offset 2048 "$img" $((mb * 1024 - 1024)) >/dev/null
 	(cd "$1" && mcopy -s -m -i "$img@@1M" ./* ::/)
 }
 stick_cat() { mtype -i "$1@@1M" "::$2" 2>/dev/null; }
@@ -272,7 +382,9 @@ boot() {
 		-nic user,model=pcnet,restrict=on
 		-drive "if=none,id=emmc,file=$disk,format=raw"
 		-device sdhci-pci -device sd-card,drive=emmc)
-	[ -n "$stick" ] && q+=(-drive "if=none,id=stick,file=$stick,format=raw" -device usb-storage,drive=stick)
+	# the stick sits on xHCI: UHCI's ~1 MB/s is too slow for S12's backup
+	[ -n "$stick" ] && q+=(-drive "if=none,id=stick,file=$stick,format=raw"
+		-device qemu-xhci,id=xhci -device usb-storage,bus=xhci.0,drive=stick)
 	say "boot $BOOTN '$name': $(echo "$cl" | grep -o 'root=[^ ]*')$(echo " $cl" | grep -o ' c5\.[^ ]*' | tr -d '\n') flag='$(img_flag "$disk")'${stick:+ stick=${stick##*/}}"
 	: > "$RUN/$name.res"
 	: > "$RUN/$name.log"

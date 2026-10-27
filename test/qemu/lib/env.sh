@@ -47,11 +47,18 @@ VMLINUX=$QWORK/vmlinux-$KVER-$(cat "$QDIR/kernel/malta.config" "$QDIR/kernel/bui
 
 # Printer GPT (sectors), see docs/printer-facts.md. p1-p6 are exact; p7
 # (userdata) is cut to what is left of the 2 GiB emulated card (QEMU's
-# sd-card needs a power-of-two size).
+# sd-card needs a power-of-two size). As on the printer, the stock-layout
+# image's primary header claims last usable LBA = alternate LBA =
+# GPT_QUIRK_LAST, far below the disk end, and there is no backup GPT.
 DISK_SECTORS=$((2 * 1024 * 1024 * 2))
-declare -A PSTART=([1]=2048 [2]=18432 [3]=223232 [4]=239616 [5]=444416 [6]=446464 [7]=2543616)
-declare -A PSIZE=([1]=16384 [2]=204800 [3]=16384 [4]=204800 [5]=2048 [6]=2097152)
-declare -A PNAME=([1]=kernel [2]=rootfs [3]=kernel2 [4]=rootfs2 [5]=ota [6]=usershare [7]=userdata)
+GPT_QUIRK_LAST=3952639
+# c5os size the stock-side installer uses in the tests (C5_C5OS_MIB)
+QEMU_C5OS_MIB=384
+# Partition layout after the installer's repartition: p7 shrunk, p8 = c5os
+# ending at GPT_QUIRK_LAST, 1 MiB aligned (the backend's formula).
+declare -A PSTART=([1]=2048 [2]=18432 [3]=223232 [4]=239616 [5]=444416 [6]=446464 [7]=2543616 [8]=3166208)
+declare -A PSIZE=([1]=16384 [2]=204800 [3]=16384 [4]=204800 [5]=2048 [6]=2097152 [7]=622592 [8]=786432)
+declare -A PNAME=([1]=kernel [2]=rootfs [3]=kernel2 [4]=rootfs2 [5]=ota [6]=usershare [7]=userdata [8]=c5os)
 
 pick_cross_compile() {
 	local c

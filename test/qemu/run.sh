@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # opencreator-os QEMU system tests (WSL/Linux, no root needed).
 #
-#   test/qemu/run.sh [SCENARIO...]     default: all (S1..S11)
+#   test/qemu/run.sh [SCENARIO...]     default: all (S1..S14)
 #
 # Boots the real OpenWrt root.squashfs and the stock 2.0.0 userspace on an
 # emulated eMMC with the printer's GPT, emulates the SPL's slot choice, and
@@ -33,6 +33,9 @@ for t in qemu-system-mipsel python3 sgdisk sfdisk mkfs.ext4 debugfs mkfs.vfat mc
 done
 
 "$QDIR/kernel/build.sh" || exit 2
+# the install stick ships a static sfdisk and partx for the repartition
+{ [ -x "$QREPO/installer/tools/out/sfdisk" ] && [ -x "$QREPO/installer/tools/out/partx" ]; } ||
+	"$QREPO/installer/tools/build.sh" || exit 2
 build_stock_fixture || exit 2
 build_base_disk || exit 2
 
