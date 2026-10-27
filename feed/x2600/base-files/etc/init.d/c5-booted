@@ -4,10 +4,11 @@
 # End of the try-once boot: preinit (05_c5_tryboot) pointed the boot flag at
 # the stock slot; once this boot is healthy, point it back at our slot. That
 # also commits a sysupgrade or install that is booting for the first time:
-# /data/opencreator-os/pending-commit (written by sysupgrade) is removed.
+# /data/opencreator-os/pending-commit (written by sysupgrade; /data is the
+# c5os partition) is removed.
 #
 # Healthy = all of
-#  - /data mounted, no test marker /data/opencreator-os/tryboot-fail-test;
+#  - /data (c5os) mounted, no test marker /data/opencreator-os/tryboot-fail-test;
 #  - Wi-Fi credentials present (/etc/c5/wifi.conf or wireless.c5sta.ssid):
 #    without them the printer cannot be reached, so it is never committed;
 #  - within C5_READY_TIMEOUT (120) seconds: an IPv4 address of global scope

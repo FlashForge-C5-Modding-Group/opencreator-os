@@ -9,7 +9,9 @@
 #   boot-stock                   next boot: the stock slot
 #   restore-stock                write kernel.img + rootfs.squashfs into the
 #                                stock slot, from the stick directory or, if
-#                                it has neither, from /data/opencreator-os/stock
+#                                it has neither, from opencreator-os/stock on
+#                                userdata (stock's /usr/data; mounted
+#                                read-only at $C5_UDATA for the run)
 #   restore-partition usershare  write usershare.img into usershare
 #
 # Images are checked against SHA256SUMS (or MD5SUMS) next to them, written,
@@ -20,10 +22,10 @@
 # stock and the printer reboots - but only if stock is selectable: not
 # marked invalid (lib/c5/restore.sh), its slot starts with a uImage kernel
 # and a squashfs root, and, after restore-partition, its kernel and rootfs
-# equal kernel.img/rootfs.squashfs on the stick or in
-# /data/opencreator-os/stock when either has them. Otherwise OpenWrt keeps
-# booting with the flag on itself and STOCK-NEEDS-REPAIR.txt on the stick
-# says what is left, so the next repair can follow with another stick.
+# equal kernel.img/rootfs.squashfs on the stick or in opencreator-os/stock
+# on userdata when either has them. Otherwise OpenWrt keeps booting with the
+# flag on itself and STOCK-NEEDS-REPAIR.txt on the stick says what is left,
+# so the next repair can follow with another stick.
 # On failure restore.conf becomes restore.failed and OpenWrt keeps booting;
 # if anything of stock was written the flag stays on OpenWrt (stock marked
 # invalid). Either way a stick left plugged in does nothing next time.
@@ -121,10 +123,17 @@ act() {
 			;;
 		restore-stock)
 			[ $# = 1 ] || { c5_why "usage: restore-stock"; return 1; }
-			src=$R
-			[ -e "$R/kernel.img" ] || [ -e "$R/rootfs.squashfs" ] || src=$C5_OCDIR/stock
-			log "restore-stock: images from $src"
-			c5_restore_stock "$src" 0 >> "$LOG" 2>&1
+			if [ -e "$R/kernel.img" ] || [ -e "$R/rootfs.squashfs" ]; then
+				src=$R
+				log "restore-stock: images from $src"
+				c5_restore_stock "$src" 0 >> "$LOG" 2>&1
+			else
+				src=$C5_UDATA/opencreator-os/stock
+				log "restore-stock: images from $src"
+				c5_with_part userdata "$C5_UDATA" ro,noload c5_restore_stock "$src" 0 >> "$LOG" 2>&1 && return 0
+				[ -n "$C5_WHY" ] || c5_why "cannot mount userdata at $C5_UDATA"
+				return 1
+			fi
 			;;
 		restore-partition)
 			[ $# = 2 ] || { c5_why "usage: restore-partition usershare"; return 1; }
@@ -162,10 +171,11 @@ if ! act "$@"; then
 	exit 1
 fi
 
-# May the flag point at stock now?
-why=$(c5_stock_blocker) || why=
-if [ -z "$why" ] && [ "$1" = restore-partition ]; then
-	for src in "$R" "$C5_OCDIR/stock"; do
+# Sets why when the stock slot differs from the stick's or userdata's saved
+# kernel.img + rootfs.squashfs; runs with userdata mounted at $C5_UDATA.
+stock_check() {
+	local src
+	for src in "$R" "$C5_UDATA/opencreator-os/stock"; do
 		c5_stock_matches "$src"
 		case $? in
 			0) log "stock slot $OTHER equals $src/kernel.img + rootfs.squashfs"; break ;;
@@ -173,6 +183,16 @@ if [ -z "$why" ] && [ "$1" = restore-partition ]; then
 			*) log "no verifiable kernel.img + rootfs.squashfs in $src" ;;
 		esac
 	done
+	return 0
+}
+
+# May the flag point at stock now?
+why=$(c5_stock_blocker) || why=
+if [ -z "$why" ] && [ "$1" = restore-partition ]; then
+	c5_with_part userdata "$C5_UDATA" ro,noload stock_check || {
+		log "cannot mount userdata at $C5_UDATA; checking the stick only"
+		stock_check
+	}
 fi
 if [ -n "$why" ]; then
 	if ! c5_flag_write "$OWN"; then

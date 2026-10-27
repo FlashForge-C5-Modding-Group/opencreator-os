@@ -126,7 +126,8 @@ check root "$(c5_root_dev) squashfs at /rom" root_on_rom
 # shellcheck disable=SC2016 # awk program
 check overlay "/ is overlayfs" awk '$2 == "/" && $3 == "overlay" { f = 1 } END { exit !f }' /proc/mounts
 check emmc "GPT names on $C5_DISK" emmc_ok
-check data "userdata at /data, read-only" data_ro
+check data "/data read-only" data_ro
+if has_part c5os; then res INFO c5os present; else res INFO c5os absent; fi
 check uarts "ttyS2 ttyS4 ttyS5 ttyS7" uarts_ok
 check heartbeat "gpio75 samples $hb" hb_toggles
 check watchdog "/dev/watchdog" test -c /dev/watchdog

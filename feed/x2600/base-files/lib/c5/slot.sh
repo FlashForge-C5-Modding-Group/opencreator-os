@@ -8,18 +8,24 @@
 #
 # Layout (GPT names on the eMMC): kernel/rootfs = slot 1, kernel2/rootfs2 =
 # slot 2, ota = boot flag ("ota:kernel" -> slot 1, "ota:kernel2" -> slot 2,
-# the SPL compares the first 11 bytes), userdata = stock /usr/data.
+# the SPL compares the first 11 bytes), userdata = stock /usr/data, c5os =
+# OpenWrt's /data (created by the stock-side installer by shrinking userdata).
 #
 # Overridable for testing: C5_DISK, C5_CMDLINE_FILE, C5_SYSBLOCK, C5_KMSG,
-# C5_MOUNTS, C5_DATA, C5_OCDIR, C5_REBOOT_MARK.
+# C5_MOUNTS, C5_DATA, C5_OCDIR, C5_UDATA, C5_REBOOT_MARK.
 
 C5_DISK=${C5_DISK:-/dev/mmcblk0}
 C5_CMDLINE_FILE=${C5_CMDLINE_FILE:-/proc/cmdline}
 C5_SYSBLOCK=${C5_SYSBLOCK:-/sys/class/block}
 C5_KMSG=${C5_KMSG:-/dev/kmsg}
 C5_MOUNTS=${C5_MOUNTS:-/proc/mounts}
-C5_DATA=${C5_DATA:-/data}                       # userdata mount point (fstab)
-C5_OCDIR=${C5_OCDIR:-$C5_DATA/opencreator-os}   # saved stock, logs, pending-commit
+C5_DATA=${C5_DATA:-/data}                       # c5os mount point (fstab)
+C5_OCDIR=${C5_OCDIR:-$C5_DATA/opencreator-os}   # logs, pending-commit, sysupgrade.tgz
+# Transient mount point of userdata (stock /usr/data): OpenWrt mounts it only
+# for files stock wrote (opencreator-os/stock, wifi.conf, authorized_keys)
+# or reads (opencreator-os/chainload/kernel.uimage, staged by stock's
+# c5-chainload.sh), see c5_with_part.
+C5_UDATA=${C5_UDATA:-/tmp/c5-userdata}
 # Created by the USB recovery hook right before it reboots; tells c5-booted
 # (which may still run while the reboot is in progress) to leave the flag.
 C5_REBOOT_MARK=${C5_REBOOT_MARK:-/tmp/c5-recovery.reboot}
@@ -187,6 +193,31 @@ c5_mounted() { awk -v d="$1" '$1 == d { f = 1 } END { exit !f }' "$C5_MOUNTS"; }
 
 # $1 = directory: is something mounted on it?
 c5_is_mountpoint() { awk -v m="$1" '$2 == m { f = 1 } END { exit !f }' "$C5_MOUNTS"; }
+
+# NAME MNT OPTS CMD...: mount the ext4 partition NAME at MNT with OPTS, run
+# CMD, sync, unmount. Returns CMD's status, or 1 (with a bootlog line) when
+# the partition is missing or cannot be mounted. A partition that is already
+# mounted elsewhere (e.g. userdata at /data on a system without c5os) is
+# bind-mounted from there instead when the mount fails: a second mount that
+# would change the read-only state of a mounted filesystem fails with EBUSY.
+c5_with_part() {
+	local name="$1" mnt="$2" opts="$3" dev mp rc
+	shift 3
+	dev=$(c5_part_dev "$name") || { c5_bootlog "no $name partition"; return 1; }
+	mkdir -p "$mnt"
+	if ! mount -t ext4 -o "$opts" "$dev" "$mnt" 2>/dev/null; then
+		mp=$(awk -v d="$dev" '$1 == d { print $2; exit }' "$C5_MOUNTS")
+		if [ -z "$mp" ] || ! mount -o bind "$mp" "$mnt" 2>/dev/null; then
+			c5_bootlog "cannot mount $dev ($name) on $mnt"
+			return 1
+		fi
+	fi
+	"$@"
+	rc=$?
+	sync
+	umount "$mnt"
+	return $rc
+}
 
 # $1 = 1|2: kernel partition starts with a uImage header and rootfs with a
 # squashfs superblock (what the SPL and the kernel need to get going).

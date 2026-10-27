@@ -4,8 +4,9 @@
 # c5-wifi-sta [--wait SECONDS]
 #
 # Create the Wi-Fi client interface wireless.c5sta (network "wwan", DHCP) from
-# /etc/c5/wifi.conf (shell-sourceable SSID='...' PSK='...', imported from
-# userdata by preinit). Idempotent: does nothing once wireless.c5sta exists.
+# /etc/c5/wifi.conf (shell-sourceable SSID='...' PSK='...', imported by
+# preinit from userdata, stock's /usr/data; /data is c5os). Idempotent: does
+# nothing once wireless.c5sta exists.
 #
 # The radio's wifi-device section is created by 'wifi config', which is
 # skipped while /etc/init.d/boot still has /tmp/.config_pending. With --wait

@@ -1,8 +1,11 @@
 #!/bin/sh
 # shellcheck disable=SC1091
-# Mount the stock userdata partition (stock /usr/data) at /data, with fsck.
-# On a USB test boot (c5.usbtest=1) it is mounted read-only without journal
-# replay and without fsck, so the eMMC is not written.
+# Mount the c5os partition (OpenWrt's own state) at /data, with fsck. Without
+# c5os (the stock-side installer has not repartitioned yet, e.g. on the
+# zero-write USB test) the stock userdata partition (stock /usr/data) is
+# mounted there instead. On a USB test boot (c5.usbtest=1) /data is mounted
+# read-only without journal replay and without fsck, so the eMMC is not
+# written.
 #
 # Runs before fstools' 10-fstab ("10-c5..." sorts first); because this creates
 # /etc/config/fstab, 10-fstab's 'block detect' is skipped, so the global
@@ -10,7 +13,8 @@
 
 . /lib/c5/slot.sh
 
-dev=$(c5_part_dev userdata) || exit 0
+dev=$(c5_part_dev c5os) || dev=$(c5_part_dev userdata) || exit 0
+c5_bootlog "fstab: /data on $dev"
 
 opts='rw,noatime' check=1
 if c5_usbtest; then

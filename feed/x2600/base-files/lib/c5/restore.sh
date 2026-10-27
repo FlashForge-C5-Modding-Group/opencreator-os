@@ -137,7 +137,7 @@ c5_restore_partition() {
 	case "$1" in
 		usershare) ;;
 		userdata)
-			c5_why "userdata is mounted at $C5_DATA and is too large for FAT32; restore it from stock or over SSH"
+			c5_why "userdata is stock's /usr/data and too large for FAT32; restore it from stock or over SSH"
 			return 1
 			;;
 		*)

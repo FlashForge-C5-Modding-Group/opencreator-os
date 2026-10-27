@@ -4,7 +4,8 @@
 # c5-slot status | boot-stock [--reboot] | boot-openwrt [--reboot] | bootlog
 #
 # Inspect and set the Creator 5 Pro SPL boot flag. "stock" is the slot this
-# system is not running from, "openwrt" the one it is running from.
+# system is not running from, "openwrt" the one it is running from. A
+# pending sysupgrade is recorded in $C5_OCDIR/pending-commit (on c5os, /data).
 
 . /lib/c5/slot.sh
 
