@@ -29,6 +29,8 @@ collect() {
 	local d="$1" f
 	mkdir -p "$d"
 	uname -a > "$d/uname.txt" 2>&1
+	{ date; cat /proc/uptime; } > "$d/date.txt" 2>&1
+	cat /tmp/resolv.conf > "$d/resolv.txt" 2>&1
 	cat /proc/cmdline > "$d/cmdline.txt"
 	cat /proc/version > "$d/version.txt"
 	cat /proc/cpuinfo > "$d/cpuinfo.txt"
@@ -77,12 +79,13 @@ while [ -z "$(ipv4)" ] && [ "$t" -lt "$WAIT" ]; do
 	t=$((t + 5))
 done
 
-# PC11 heartbeat: c5-heartbeat toggles it once a second
+# PC11 heartbeat: c5-heartbeat flips it once a second, so samples one
+# second apart alternate. (OpenWrt's busybox sleep takes whole seconds only.)
 hb=''
 i=0
-while [ "$i" -lt 8 ]; do
+while [ "$i" -lt 6 ]; do
 	hb="$hb$(cat /sys/class/gpio/gpio75/value 2>/dev/null || echo x)"
-	sleep 0.5
+	sleep 1
 	i=$((i + 1))
 done
 
