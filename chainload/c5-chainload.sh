@@ -15,7 +15,7 @@
 #                                           decision; changes nothing
 #
 # ROOTDEV is the OpenWrt squashfs root as the new kernel will name it, e.g.
-# /dev/mmcblk0p4 (eMMC slot) or /dev/sda1 (USB stick test).
+# /dev/mmcblk0p4 (eMMC slot).
 #
 # Commit: a healthy OpenWrt boot from an eMMC slot points the boot flag at
 # that slot (c5-booted), so the SPL will boot the slot's own kernel next.
@@ -27,8 +27,7 @@
 #
 # Files: chainload.ko and kernel.uimage in the same directory as this script
 # (normally /usr/data/opencreator-os/chainload/). BusyBox ash.
-# C5CL_EXTRA: words appended to the new command line (e.g. c5.usbtest=1 for
-# the zero-write USB test stick); only c5.* words are accepted.
+# C5CL_EXTRA: words appended to the new command line; only c5.* words accepted.
 # Test overrides: C5CL_CMDLINE, C5CL_IOMEM, C5CL_KALLSYMS name the files
 # read instead of /proc/cmdline, /proc/iomem, /proc/kallsyms; C5CL_DISK
 # (/dev/mmcblk0), C5CL_FDISK (fdisk), C5CL_DEVROOT (prefix for reading

@@ -6,7 +6,7 @@
 # VERSION_DIR  build output, e.g. /mnt/f/creator5-dev/opencreator-os-builds/<ver>,
 #              holding opencreator-os-x2600-generic-flashforge_creator5pro-*
 # OUTDIR       new or empty directory; its contents go to the stick root
-# --flip       add opencreator-os/FLIP: switch the boot flag after the write
+# --flip       add opencreator-os/FLIP: test-boot, or flip a known-good kernel
 # --chainload  add opencreator-os/CHAINLOAD: after the write, test-boot
 #              OpenWrt from RAM (boot flag stays on stock)
 # --authorized-keys FILE  ship FILE as the SSH keys for OpenWrt's root
@@ -15,7 +15,7 @@
 #
 # chainload.ko comes from chainload/out/ of this repo (chainload/build.sh),
 # sfdisk and partx from installer/tools/out/ (installer/tools/build.sh).
-# FLIP, CHAINLOAD and authorized_keys are left out of the checksum lists so
+# ACTION, wifi.conf, FLIP, CHAINLOAD and authorized_keys are left out of the checksum lists so
 # they can be added or edited on the stick later.
 set -euo pipefail
 
@@ -56,7 +56,7 @@ for a in kernel.uimage root.squashfs sysupgrade.tar; do
 	[ -s "$VDIR/$PREFIX-$a" ] || die "missing $VDIR/$PREFIX-$a"
 done
 for f in installer/runFirmwareExe.sh installer/opencreator-os/install.sh installer/opencreator-os/lib.sh \
-	installer/opencreator-os/switch-to-openwrt.sh chainload/out/chainload.ko chainload/c5-chainload.sh \
+	chainload/out/chainload.ko chainload/c5-chainload.sh \
 	installer/tools/out/sfdisk installer/tools/out/partx; do
 	[ -s "$REPO/$f" ] || die "missing $REPO/$f"
 done
@@ -89,7 +89,7 @@ echo "kernel.uimage payload $KPAY of $CL_LIMIT bytes (chainload limit)"
 
 mkdir -p "$OUT/opencreator-os/bin" "$OUT/chainload"
 install -m 0755 "$REPO/installer/runFirmwareExe.sh" "$OUT/"
-install -m 0755 "$REPO/installer/opencreator-os/install.sh" "$REPO/installer/opencreator-os/switch-to-openwrt.sh" "$OUT/opencreator-os/"
+install -m 0755 "$REPO/installer/opencreator-os/install.sh" "$OUT/opencreator-os/"
 install -m 0644 "$REPO/installer/opencreator-os/lib.sh" "$OUT/opencreator-os/"
 install -m 0755 "$REPO/installer/tools/out/sfdisk" "$REPO/installer/tools/out/partx" "$OUT/opencreator-os/bin/"
 [ -z "$APP" ] || install -m 0755 "$APP" "$OUT/opencreator-os/os-installer"
@@ -124,10 +124,10 @@ echo
 echo "Copy the contents of $OUT to the root of a FAT32 USB stick."
 echo "Do not put opencreator-fs's runFirmwareExe.sh on the same stick."
 if [ "$FLIP" = 1 ]; then
-	echo "FLIP is set: after a verified write the printer reboots into OpenWrt."
+	echo "FLIP is set: test-boot before switching, or reboot directly when the kernel is known-good."
 elif [ "$CHAIN" = 1 ]; then
 	echo "CHAINLOAD is set: after a verified write the printer test-boots OpenWrt from RAM;"
-	echo "the boot flag stays on stock. A healthy OpenWrt then points the flag at itself."
+	echo "a known-good kernel skips the test. Otherwise a healthy test boot commits OpenWrt."
 else
 	echo "No FLIP: the printer writes the spare slot and boots stock again; see docs/install.md."
 fi

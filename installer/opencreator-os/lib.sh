@@ -43,12 +43,37 @@ SQUASHFS_MAGIC=hsqs
 LOG_STICK_NAME=${LOG_STICK_NAME:-opencreator-os-install.log}
 LOG_DATA_NAME=${LOG_DATA_NAME:-install.log}
 
+# Hook arguments win; manual stock runs read literals, never execute startup.
+model_read() {
+	if [ -z "$MACHINE$PID" ] && [ "$C5_SYSTEM" = stock ]; then
+		mr_file=${C5_APP_STARTUP:-/usr/prog/app_startup.sh}
+		MACHINE=$(sed -n "s/^MACHINE=//p" "$mr_file" 2>/dev/null | tr -d '\r')
+		PID=$(sed -n "s/^PID=//p" "$mr_file" 2>/dev/null | tr -d '\r')
+		case "$MACHINE" in \"*\") MACHINE=${MACHINE#\"}; MACHINE=${MACHINE%\"} ;; \'*\') MACHINE=${MACHINE#\'}; MACHINE=${MACHINE%\'} ;; esac
+		case "$PID" in \"*\") PID=${PID#\"}; PID=${PID%\"} ;; \'*\') PID=${PID#\'}; PID=${PID%\'} ;; esac
+	fi
+	case "$MACHINE $PID" in
+	"Creator5Pro 0029" | "Creator5 0028") return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+action_read() {
+	if [ -z "$ACTION" ] && [ -f "$STICK/opencreator-os/ACTION" ]; then
+		ACTION=$(tr -d '\r' < "$STICK/opencreator-os/ACTION") || return 1
+		[ -n "$ACTION" ] || return 1
+	fi
+	[ -n "$ACTION" ] || { [ "$C5_SYSTEM" != stock ] || ACTION=install; }
+	case "$ACTION" in '' | install | swap | repair-stock | update) return 0 ;; *) return 1 ;; esac
+}
+
 # --- logging -----------------------------------------------------------------
 
 # NO_DATA_LOG=1 while userdata is unmounted (its mount point must stay empty)
 log() {
 	log_line="$(date '+%F %T') $*"
 	printf '%s\n' "$*"
+	[ "${CHECK:-0}" != 1 ] || return 0
 	if [ -n "${STICK:-}" ] && [ -d "$STICK" ]; then
 		printf '%s\n' "$log_line" >> "$STICK/$LOG_STICK_NAME" 2>/dev/null
 	fi
@@ -139,11 +164,10 @@ ui_confirm() {
 }
 
 # ui_menu ID TEXT ITEM... -> UI_CHOICE = chosen 1-based index, 0 for cancel
-# (a variable: the request itself goes to stdout). Without the app: 1 for
-# ACTION=install, 2 for ACTION=swap.
+# (a variable: the request itself goes to stdout).
 ui_menu() {
 	if [ "$UI" != 1 ]; then
-		case "${ACTION:-install}" in swap) UI_CHOICE=2 ;; *) UI_CHOICE=1 ;; esac
+		case "${ACTION:-}" in swap) UI_CHOICE=2 ;; repair-stock) UI_CHOICE=3 ;; install | update) UI_CHOICE=1 ;; *) UI_CHOICE=0 ;; esac
 		return 0
 	fi
 	um_id=$1 um_line="MENU $1 $2"
@@ -229,9 +253,7 @@ flag_write() {
 }
 
 # flag_ensure_own SLOT: before writing any partition, the boot flag must name
-# the running slot, so a power loss mid-write still boots stock. Rewrites it
-# (with read-back) when it names the other slot, e.g. after
-# switch-to-openwrt.sh --no-reboot.
+# the running slot, so a power loss mid-write still boots stock.
 flag_ensure_own() {
 	fe_now=$(flag_slot) || return 1
 	[ "$fe_now" = "$1" ] && return 0

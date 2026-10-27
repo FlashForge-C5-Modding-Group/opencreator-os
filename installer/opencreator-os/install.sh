@@ -1,31 +1,31 @@
 #!/bin/sh
-# opencreator-os installer. Runs on the stock Creator 5 Pro firmware (busybox
-# sh, root) and writes OpenWrt into the eMMC slot stock is NOT running from.
-# The boot flag is left on stock unless --flip (or a FLIP marker) is given.
+# opencreator-os installer. Runs on stock (busybox sh) or OpenWrt, as root.
+# Stock writes the inactive eMMC slot; OpenWrt uses sysupgrade.
+# The boot flag stays on stock until a test boot or a known-good kernel.
 # Install also creates the c5os partition (userdata shrunk) once, optionally
 # after a verified whole-eMMC backup to the stick.
 #
 #   sh install.sh [--from-stick DIR] [--check] [--flip | --chainload] [--yes]
-#                 [--hook] [--ui] [--action install|swap] [--backup]
+#                 [--hook] [--ui] [--action install|swap|repair-stock|update] [--backup]
 #
 #   --from-stick DIR  payload directory (default: the directory above this
 #                     script, i.e. the stick root)
 #   --check           run every precondition, print the plan, write nothing
-#   --flip            after a verified write, point the boot flag at OpenWrt
-#                     and reboot (same as a file opencreator-os/FLIP on the stick)
+#   --flip            test-boot after a verified write, or point the boot flag
+#                     at OpenWrt directly when the kernel is known-good
 #   --chainload       after a verified write (or when the slot is already up
 #                     to date), test-boot OpenWrt from RAM with c5-chainload.sh;
 #                     the boot flag stays on stock (same as opencreator-os/CHAINLOAD)
 #   --yes             do not ask for confirmation (incl. creating c5os)
-#   --hook            started by the stock USB hook (runFirmwareExe.sh): no
+#   --hook            started by the USB hook (runFirmwareExe.sh): no
 #                     final write confirmation, exits 1 after a non-flip
 #                     install so stock keeps booting
 #   --ui              screen requests on stdout, answers on stdin (the
 #                     os-installer app; protocol in lib.sh)
-#   --action ACTION   without --ui: install (default) or swap (boot flag to
-#                     the other system and reboot)
+#   --action ACTION   headless action; otherwise read opencreator-os/ACTION
+#                     (stock defaults to install, OpenWrt to no action)
 #   --backup          without --ui: back up the eMMC to DIR/emmc-backup first
-# Other non-option arguments (stock passes MACHINE and PID) are ignored.
+# Hook model arguments must be Creator5Pro 0029 or Creator5 0028.
 #
 # Payload in DIR: kernel.uimage root.squashfs sysupgrade.tar VERSION
 # chainload/chainload.ko chainload/c5-chainload.sh SHA256SUMS MD5SUMS,
@@ -36,7 +36,7 @@ set -u
 usage() { sed -n '2,33s/^# \{0,1\}//p' "$0"; }
 
 SELF_DIR=$(cd "$(dirname "$0")" && pwd) || exit 1
-STICK='' CHECK=0 FLIP=0 CHAIN=0 YES=0 HOOK=0 UI=0 ACTION=install BACKUP=0
+STICK='' CHECK=0 FLIP=0 CHAIN=0 YES=0 HOOK=0 UI=0 ACTION='' BACKUP=0 MACHINE='' PID='' MODEL_ARGS=0
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--from-stick)
@@ -45,7 +45,7 @@ while [ $# -gt 0 ]; do
 		shift
 		;;
 	--action)
-		case "${2:-}" in install | swap) ACTION=$2 ;; *) echo "install: --action needs install or swap" >&2; exit 2 ;; esac
+		case "${2:-}" in install | swap | repair-stock | update) ACTION=$2 ;; *) echo "install: --action needs install, swap, repair-stock or update" >&2; exit 2 ;; esac
 		shift
 		;;
 	--check) CHECK=1 ;;
@@ -57,7 +57,14 @@ while [ $# -gt 0 ]; do
 	--backup) BACKUP=1 ;;
 	-h | --help) usage; exit 0 ;;
 	-*) echo "install: unknown option $1" >&2; usage >&2; exit 2 ;;
-	*) ;;
+	*)
+		case "$MODEL_ARGS" in
+		0) MACHINE=$1 ;;
+		1) PID=$1 ;;
+		*) echo "install: too many model arguments" >&2; exit 2 ;;
+		esac
+		MODEL_ARGS=$((MODEL_ARGS + 1))
+		;;
 	esac
 	shift
 done
@@ -65,9 +72,20 @@ done
 STICK=$(cd "$STICK" 2>/dev/null && pwd) || { echo "install: payload directory not found" >&2; exit 1; }
 C5_SFDISK=${C5_SFDISK:-$SELF_DIR/bin/sfdisk}
 C5_PARTX=${C5_PARTX:-$SELF_DIR/bin/partx}
+if [ -z "${C5_SYSTEM:-}" ]; then
+	if [ -f /lib/c5/slot.sh ] && [ -f /etc/openwrt_release ]; then C5_SYSTEM=openwrt; else C5_SYSTEM=stock; fi
+fi
+case "$C5_SYSTEM" in
+openwrt) C5_DATA=${C5_DATA:-/data} ;;
+stock) ;;
+*) echo "install: unknown system $C5_SYSTEM" >&2; exit 1 ;;
+esac
 
 # shellcheck source-path=SCRIPTDIR source=lib.sh
 . "$SELF_DIR/lib.sh"
+model_read || { echo "install: model mismatch: '$MACHINE $PID'; nothing written" >&2; exit 1; }
+action_read || { echo "install: invalid ACTION; nothing written" >&2; exit 1; }
+[ "$CHECK" != 1 ] || NO_DATA_LOG=1
 
 [ -f "$STICK/opencreator-os/FLIP" ] && FLIP=1
 [ -f "$STICK/opencreator-os/CHAINLOAD" ] && CHAIN=1
@@ -125,8 +143,7 @@ preflight() {
 	done
 	OWN=$(own_slot) || abort "root=$(cmdline_root) is neither GPT rootfs ($(part_dev rootfs)) nor rootfs2 ($(part_dev rootfs2))"
 	FLAG=$(flag_slot) || abort "cannot read the boot flag"
-	# a flag naming the other slot (e.g. switch-to-openwrt.sh --no-reboot) is
-	# pointed back at the running slot before the first partition write
+	# Before the first partition write the flag must name the running slot.
 	TGT=$(other_slot "$OWN")
 	OKDEV=$(part_dev "$(slot_kname "$OWN")")
 	ORDEV=$(part_dev "$(slot_rname "$OWN")")
@@ -309,27 +326,47 @@ save_stock() {
 	log "stock: saved and verified ($SUM)"
 }
 
-save_wifi() {
+save_settings() (
+	mnt=/tmp/c5os-config
+	mkdir -p "$mnt" || fail "cannot create $mnt"
+	mount -t ext4 -o rw,noatime "$C5OS_DEV" "$mnt" || fail "cannot mount c5os"
+	trap 'umount "$mnt"; rmdir "$mnt"' EXIT
+	dest=$mnt/opencreator-os
+	mkdir -p "$dest" || fail "cannot create $dest"
+	printf '%s %s\n' "$MACHINE" "$PID" > "$dest/model" || fail "cannot write model"
+	printf 'slot=%s\n' "$TGT" > "$dest/pending-commit" || fail "cannot write pending-commit"
 	wpa=${C5_WPA:-/usr/prog/wifi/wpa_supplicant.conf}
-	if [ ! -f "$wpa" ]; then
+	if [ -s "$STICK/opencreator-os/wifi.conf" ] &&
+		[ "$(head -n 1 "$STICK/opencreator-os/wifi.conf")" != "$WIFI_CONF_AUTO" ]; then
+		(umask 077; cp "$STICK/opencreator-os/wifi.conf" "$dest/wifi.conf" && chmod 600 "$dest/wifi.conf") ||
+			fail "cannot copy wifi.conf"
+		log "wifi: copied stick wifi.conf to c5os"
+	elif [ ! -f "$wpa" ]; then
 		log "wifi: $wpa not found; wifi.conf not written"
-	elif ssid=$(wifi_conf "$wpa" "$OCDIR/wifi.conf"); then
-		if grep -qx "PSK=''" "$OCDIR/wifi.conf"; then
-			log "wifi: saved SSID '$ssid' (no psk= in $wpa; open network?) to $OCDIR/wifi.conf"
-		else
-			log "wifi: saved SSID '$ssid' with its key to $OCDIR/wifi.conf"
-		fi
+	elif ssid=$(wifi_conf "$wpa" "$dest/wifi.conf"); then
+		log "wifi: saved SSID '$ssid' to c5os"
 	elif [ $? = 2 ]; then
-		fail "cannot write $OCDIR/wifi.conf"
+		fail "cannot write c5os wifi.conf"
 	else
 		log "wifi: no network block with ssid= in $wpa; wifi.conf not written"
 	fi
 	if [ -s "$STICK/opencreator-os/authorized_keys" ]; then
-		(umask 077; cp "$STICK/opencreator-os/authorized_keys" "$OCDIR/authorized_keys" && chmod 600 "$OCDIR/authorized_keys") ||
+		(umask 077; cp "$STICK/opencreator-os/authorized_keys" "$dest/authorized_keys" && chmod 600 "$dest/authorized_keys") ||
 			fail "cannot copy authorized_keys"
-		log "ssh: copied authorized_keys to $OCDIR/authorized_keys"
+		log "ssh: copied authorized_keys to c5os"
 	fi
-}
+	sync
+)
+
+kernel_good() (
+	command -v sha256sum > /dev/null 2>&1 || exit 1
+	mnt=/tmp/c5os-config
+	mkdir -p "$mnt" || exit 1
+	mount -t ext4 -o ro,noload "$C5OS_DEV" "$mnt" || { rmdir "$mnt"; exit 1; }
+	trap 'umount "$mnt"; rmdir "$mnt"' EXIT
+	good=$(cat "$mnt/opencreator-os/good-kernel" 2>/dev/null)
+	[ -n "$good" ] && [ "$(sha256sum < "$STICK/kernel.uimage" | cut -d' ' -f1)" = "$good" ]
+)
 
 copy_chainload() {
 	mkdir -p "$OCDIR/chainload" || fail "cannot create $OCDIR/chainload"
@@ -595,7 +632,9 @@ c5os_kernel_ok() {
 # the stick continue (userdata must be mounted: the marker lives there)
 c5os_reboot() {
 	[ -f "$OCDIR/c5os-rebooted" ] && fail "kernel does not see the new partition table after a reboot"
-	mkdir -p "$OCDIR" && : > "$OCDIR/c5os-rebooted" || fail "cannot write $OCDIR/c5os-rebooted"
+	if ! mkdir -p "$OCDIR" || ! : > "$OCDIR/c5os-rebooted"; then
+		fail "cannot write $OCDIR/c5os-rebooted"
+	fi
 	log "c5os: the kernel still uses the old partition table; rebooting once"
 	ui_info c5os-reboot "Partition table written\nRebooting once so the kernel sees it; the installer continues after the reboot. Leave the stick in."
 	sync
@@ -723,8 +762,9 @@ make_c5os() {
 	PT=$(part_table)
 	# shellcheck disable=SC2046
 	set -- $(printf '%s\n' "$PT" | awk '$1 == "c5os" { print $2, $3, $4 } $1 == "userdata" { u = $4 } END { print u }')
-	[ $# = 4 ] && [ "$1" = 8 ] && [ "$2" = "$C5OS_START" ] && [ "$3" = "$C5OS_SIZE" ] && [ "$4" = "$UD_NEW_SIZE" ] ||
+	if [ $# != 4 ] || [ "$1" != 8 ] || [ "$2" != "$C5OS_START" ] || [ "$3" != "$C5OS_SIZE" ] || [ "$4" != "$UD_NEW_SIZE" ]; then
 		fail "the new partition table does not read back as written: $(printf '%s\n' "$PT" | tr '\n' ';')"
+	fi
 	HAVE_C5OS=1 UD_SIZE=$UD_NEW_SIZE
 	if ! c5os_kernel_ok; then
 		remount_data || fail "cannot remount $UD_DEV on $C5_DATA"
@@ -755,7 +795,7 @@ do_swap() {
 }
 
 do_install() {
-	if [ "$CHAIN_DONE" = 1 ]; then
+	if [ "$CHAIN_DONE" = 1 ] && ! kernel_good; then
 		log "chainload: this stick's test boot already ran (key $CL_KEY) and stock is running again:"
 		log "chainload: the test hung, or OpenWrt failed its health check (see $OCDIR/logs/ if it got that far)"
 		log "chainload: not repeating it; to test again, edit or re-create opencreator-os/CHAINLOAD on the stick"
@@ -784,10 +824,15 @@ do_install() {
 	ui_info install "Installing opencreator-os $VERSION\nSaving the stock slot and writing slot $TGT. Do not power off."
 	mkdir -p "$OCDIR" || fail "cannot create $OCDIR"
 	save_stock
-	save_wifi
+	save_settings || fail "cannot save c5os settings"
 	copy_chainload
 	flag_ensure_own "$OWN" || fail "cannot point the boot flag at the running slot $OWN; nothing written to slot $TGT"
 	write_slot
+	KNOWN_GOOD=0
+	if kernel_good; then
+		KNOWN_GOOD=1
+		log "chainload: kernel matches c5os good-kernel; test boot skipped"
+	fi
 
 	prev_flip=$(grep -x "flipped slot=$TGT version=$VERSION" "$OCDIR/install.state" 2>/dev/null)
 	prev_chain=$(grep "^chainload slot=$TGT " "$OCDIR/install.state" 2>/dev/null)
@@ -797,15 +842,16 @@ do_install() {
 		[ -z "$prev_chain" ] || echo "$prev_chain"
 	} > "$OCDIR/install.state"
 	sync
-	written_text="OpenWrt written to slot $TGT\nThe boot flag still points at stock. Use Swap to OpenWrt, a FLIP stick or switch-to-openwrt.sh."
+	written_text="OpenWrt written to slot $TGT\nThe boot flag still points at stock. Use Swap to OpenWrt or a FLIP stick."
 
-	if [ "$FLIP" = 1 ]; then
+	if [ "$FLIP" = 1 ] || { [ "$CHAIN" = 1 ] && [ "$KNOWN_GOOD" = 1 ]; }; then
 		if [ -n "$prev_flip" ]; then
 			log "flip: the boot flag was already switched to this build once and stock is running again"
 			log "flip: (OpenWrt probably failed its health check and fell back); not switching again"
-			log "flip: retry with sh $SELF_DIR/switch-to-openwrt.sh, or remove opencreator-os/FLIP"
+			log "flip: retry with --action swap, or remove opencreator-os/FLIP"
 			finish written "$written_text" 1
 		fi
+		[ "$KNOWN_GOOD" = 1 ] || chainload_test
 		if ! flag_write "$TGT"; then
 			flag_write "$OWN"
 			fail "boot flag write failed; flag set back to slot $OWN ('$(flag_read)')"
@@ -821,10 +867,10 @@ do_install() {
 	fi
 
 	log "install: OK; slot $TGT written, boot flag still on stock (slot $OWN)"
-	[ "$CHAIN" = 1 ] && chainload_test
+	[ "$CHAIN" != 1 ] || [ "$KNOWN_GOOD" = 1 ] || chainload_test
 	log "next: test-boot it from stock without touching the flag:"
 	log "next:   sh $OCDIR/chainload/c5-chainload.sh stage $TR && sh $OCDIR/chainload/c5-chainload.sh go"
-	log "next: or switch for real: sh $SELF_DIR/switch-to-openwrt.sh (or re-run with --flip / a FLIP marker)"
+	log "next: or switch for real: re-run with --action swap"
 	if [ "$HOOK" = 1 ]; then
 		finish written "$written_text" 1
 	fi
@@ -832,8 +878,76 @@ do_install() {
 	exit 0
 }
 
+openwrt_main() {
+	# shellcheck disable=SC1091
+	. /lib/c5/slot.sh
+	# shellcheck disable=SC1091
+	. /lib/c5/restore.sh
+	if [ "$UI" != 1 ] && [ -z "$ACTION" ]; then
+		log "install: no ACTION on OpenWrt; nothing to do"
+		return 0
+	fi
+	OWN=$(c5_own_slot) || abort "running root is not an eMMC slot"
+	TGT=$(c5_other_slot) || abort "cannot find the stock slot"
+	if [ "$UI" != 1 ]; then
+		case "$ACTION" in update | swap | repair-stock) ;; *) abort "action $ACTION is not available on OpenWrt" ;; esac
+	fi
+	if [ "$CHECK" != 1 ]; then
+		ui_menu main "opencreator-os $VERSION\nOpenWrt slot $OWN" \
+			"Update OpenWrt" "Swap to stock" "Repair stock"
+		case "$UI_CHOICE" in
+		1) ACTION=update ;;
+		2) ACTION=swap ;;
+		3) ACTION=repair-stock ;;
+		0) return 0 ;;
+		*) abort "menu item $UI_CHOICE is not available" ;;
+		esac
+	fi
+	case "$ACTION" in
+	update)
+		[ -s "$STICK/sysupgrade.tar" ] || abort "sysupgrade.tar missing in $STICK"
+		want=$(sums_get "$STICK/SHA256SUMS" sysupgrade.tar) || abort "cannot read SHA256SUMS"
+		if [ -z "$want" ] || [ "$(sha256sum < "$STICK/sysupgrade.tar" | cut -d' ' -f1)" != "$want" ]; then
+			abort "sysupgrade.tar checksum mismatch"
+		fi
+		sysupgrade -T "$STICK/sysupgrade.tar" || abort "sysupgrade image check failed"
+		if [ "$CHECK" != 1 ]; then
+			ui_info update "Updating OpenWrt\nDo not power off."
+			sysupgrade "$STICK/sysupgrade.tar" || finish failed "Update FAILED" 1
+		fi
+		;;
+	swap | repair-stock)
+		if [ "$ACTION" = repair-stock ]; then
+			ui_info repair-stock "Checking the saved stock slot..."
+			# shellcheck disable=SC2153  # C5_UDATA comes from slot.sh
+			c5_with_part userdata "$C5_UDATA" ro,noload c5_restore_stock "$C5_UDATA/opencreator-os/stock" "$CHECK" ||
+				finish failed "Stock repair FAILED\n${C5_WHY:-Cannot restore stock.}" 1
+		fi
+		if why=$(c5_stock_blocker); then finish failed "Cannot select stock\n$why" 1; fi
+		if [ "$CHECK" != 1 ]; then
+			rm -f "$C5_OCDIR/pending-commit" || finish failed "Cannot clear pending commit" 1
+			c5_tries_write 0 || finish failed "Cannot reset the boot counter" 1
+			c5_flag_write "$TGT" || finish failed "Cannot select stock" 1
+			log "swap: boot flag -> slot $TGT ('$(c5_flag_read)'); rebooting into stock"
+			ui_info swap "Rebooting into stock (slot $TGT)"
+			sync
+			$C5_REBOOT
+			exit 0
+		fi
+		;;
+	*) abort "action $ACTION is not available on OpenWrt" ;;
+	esac
+	[ "$CHECK" != 1 ] || log "check: OK"
+}
+
 # --- main ------------------------------------------------------------------------
 
+log "check: model: $MACHINE $PID"
+if [ "$C5_SYSTEM" = openwrt ]; then
+	openwrt_main
+	exit 0
+fi
+case "$ACTION" in install | swap) ;; *) abort "action $ACTION is not available on stock" ;; esac
 log "install: opencreator-os $VERSION from $STICK (check=$CHECK flip=$FLIP chainload=$CHAIN hook=$HOOK ui=$UI action=$ACTION)"
 ui_info check "Checking the printer..."
 [ "$FLIP" = 1 ] && [ "$CHAIN" = 1 ] && abort "FLIP and CHAINLOAD are both set; use one of them"
@@ -843,7 +957,7 @@ preflight
 # running (the test hung and was power-cycled, or OpenWrt failed its health
 # check) is not repeated, so a power cycle really returns to stock.
 CHAIN_DONE=0
-if [ "$CHAIN" = 1 ] && [ "$HOOK" = 1 ] &&
+if { [ "$CHAIN" = 1 ] || [ "$FLIP" = 1 ]; } && [ "$HOOK" = 1 ] &&
 	grep -q "^chainload slot=$TGT key=$CL_KEY " "$OCDIR/install.state" 2>/dev/null; then
 	CHAIN_DONE=1
 fi
