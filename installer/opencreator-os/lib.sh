@@ -211,13 +211,42 @@ shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
 # --- Wi-Fi credentials from stock's wpa_supplicant.conf ----------------------
 
-# wpa_get FILE KEY -> raw value of KEY in the first network={} block
-wpa_get() {
-	tr -d '\r' < "$1" | awk -v k="$2" '
-		!inb && /^[ \t]*network[ \t]*=[ \t]*\{/ { inb = 1; next }
-		inb && /^[ \t]*\}/ { exit }
+# wpa_blocks FILE -> one line per network={} block with an ssid=:
+#   INDEX<TAB>DISABLED<TAB>PRIORITY<TAB>SSID_RAW<TAB>KEY_RAW
+# KEY_RAW is psk= (or sae_password= when there is no psk=), may be empty.
+wpa_blocks() {
+	tr -d '\r' < "$1" | awk '
+		function out() { if (inb && ssid != "") printf "%d\t%d\t%d\t%s\t%s\n", n, dis, pri, ssid, (psk != "" ? psk : sae) }
+		!inb && /^[ \t]*network[ \t]*=[ \t]*\{/ { inb = 1; n++; ssid = psk = sae = ""; dis = pri = 0; next }
+		inb && /^[ \t]*\}/ { out(); inb = 0; next }
 		inb { l = $0; sub(/^[ \t]+/, "", l); sub(/[ \t]+$/, "", l)
-		      if (index(l, k "=") == 1) { print substr(l, length(k) + 2); exit } }'
+		      e = index(l, "="); if (!e) next
+		      k = substr(l, 1, e - 1); v = substr(l, e + 1)
+		      if (k == "ssid") ssid = v; else if (k == "psk") psk = v
+		      else if (k == "sae_password") sae = v
+		      else if (k == "disabled") dis = v + 0; else if (k == "priority") pri = v + 0 }'
+}
+
+# wpa_pick FILE -> the wpa_blocks line of the network to use: enabled
+# blocks only; highest priority=, then one with a key over an open one,
+# then the newest (wpa_supplicant's update_config appends new networks).
+wpa_pick() {
+	wpa_blocks "$1" | awk -F '\t' '$2 == 0 {
+		k = ($5 != "") ? 1 : 0
+		if (!found || $3 > bp || ($3 == bp && k >= bk)) { found = 1; bp = $3; bk = k; best = $0 } }
+		END { if (found) print best; else exit 1 }'
+}
+
+# ssid_value RAW: quoted -> contents; unquoted even-length hex -> decoded
+ssid_value() {
+	case "$1" in
+	\"*) wpa_value "$1" ;;
+	*) if [ -n "$1" ] && ! printf '%s' "$1" | grep -q '[^0-9A-Fa-f]' && [ $((${#1} % 2)) = 0 ]; then
+			hex_decode "$1"
+		else
+			printf '%s' "$1"
+		fi ;;
+	esac
 }
 
 hex_decode() {
@@ -235,25 +264,22 @@ wpa_value() {
 	esac
 }
 
+# First line of a wifi.conf written by wifi_conf; a wifi.conf without it was
+# written by hand and is left alone by callers that check.
+WIFI_CONF_AUTO="# from stock wpa_supplicant.conf (wifi_conf)"
+
 # wifi_conf WPA_CONF OUT: write OUT as shell-sourceable SSID='...' PSK='...'
-# (mode 600; what OpenWrt's c5-wifi-sta reads) from the first network block.
-# An unquoted even-length hex ssid is decoded. Prints the SSID. Returns 1
-# when the block has no ssid=, 2 when OUT cannot be written.
+# (mode 600; what OpenWrt's c5-wifi-sta reads) from the network wpa_pick
+# chooses. Prints the SSID. Returns 1 when no enabled block has an ssid=,
+# 2 when OUT cannot be written.
 wifi_conf() {
-	wc_ssid_raw=$(wpa_get "$1" ssid)
-	wc_ssid=$(wpa_value "$wc_ssid_raw")
-	case "$wc_ssid_raw" in
-	\"*) ;;
-	*) if [ -n "$wc_ssid_raw" ] && ! printf '%s' "$wc_ssid_raw" | grep -q '[^0-9A-Fa-f]' &&
-		[ $((${#wc_ssid_raw} % 2)) = 0 ]; then
-			wc_ssid=$(hex_decode "$wc_ssid_raw")
-		fi ;;
-	esac
+	wc_line=$(wpa_pick "$1") || return 1
+	wc_ssid=$(ssid_value "$(printf '%s' "$wc_line" | cut -f4)")
 	[ -n "$wc_ssid" ] || return 1
-	wc_psk=$(wpa_value "$(wpa_get "$1" psk)")
+	wc_psk=$(wpa_value "$(printf '%s' "$wc_line" | cut -f5-)")
 	(
 		umask 077
-		{ echo "SSID=$(shq "$wc_ssid")"; echo "PSK=$(shq "$wc_psk")"; } > "$2.new" &&
+		{ echo "$WIFI_CONF_AUTO"; echo "SSID=$(shq "$wc_ssid")"; echo "PSK=$(shq "$wc_psk")"; } > "$2.new" &&
 			chmod 600 "$2.new" 2>/dev/null; mv -f "$2.new" "$2"
 	) || return 2
 	printf '%s\n' "$wc_ssid"

@@ -207,8 +207,21 @@ cmd_stage() {
 	echo "cmdline:  $cmdline"
 	echo "safe_max: $sm   krp: $krp"
 	echo "commit:   $(commit_text)"
-	insmod "$DIR/chainload.ko" image="$img" cmdline="\"$cmdline\"" krp="$krp" safe_max="$sm" ||
-		{ dmesg | grep 'chainload:' | tail -n 20; die "insmod failed"; }
+	# busybox insmod >= 1.28 (stock: 1.31.1) quotes a value containing
+	# spaces itself; older ones need the quotes in the argument. Quotes too
+	# many truncate the command line at the first space, so try both forms
+	# and keep only the one whose staged cmdline reads back unchanged.
+	got=
+	for q in '' '"'; do
+		insmod "$DIR/chainload.ko" image="$img" cmdline="$q$cmdline$q" krp="$krp" safe_max="$sm" || continue
+		got=$(cat /sys/module/chainload/parameters/cmdline 2>/dev/null)
+		[ "$got" = "$cmdline" ] && break
+		echo "c5-chainload: insmod form ${q:-unquoted} staged cmdline '$got'; unloading" >&2
+		rmmod chainload || die "cannot unload a wrongly staged chainload.ko"
+		got=
+	done
+	[ -n "$got" ] ||
+		{ dmesg | grep 'chainload:' | tail -n 20; die "insmod failed, or the command line did not survive it"; }
 	dmesg | grep 'chainload:' | tail -n 40
 	echo "staged. Next: $0 go   (or: $0 unstage)"
 }

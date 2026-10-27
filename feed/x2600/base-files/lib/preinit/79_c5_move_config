@@ -15,7 +15,8 @@
 c5_import_creds() {
 	mkdir -p /etc/c5 /etc/dropbear
 	if [ -s "$1/wifi.conf" ] && [ ! -s /etc/c5/wifi.conf ]; then
-		cp "$1/wifi.conf" /etc/c5/wifi.conf && chmod 600 /etc/c5/wifi.conf
+		# a hand-written file from Windows may have CRLF line ends
+		tr -d '\r' < "$1/wifi.conf" > /etc/c5/wifi.conf && chmod 600 /etc/c5/wifi.conf
 	fi
 	if [ -s "$1/authorized_keys" ] && [ ! -s /etc/dropbear/authorized_keys ]; then
 		cp "$1/authorized_keys" /etc/dropbear/authorized_keys &&

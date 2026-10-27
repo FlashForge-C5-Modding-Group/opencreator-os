@@ -27,7 +27,7 @@ CMDLINE_FILE=${C5T_CMDLINE:-/proc/cmdline}
 LOG=$T/hook.log
 
 [ -d "$T" ] || { echo "usbtest: no directory '$T'" >&2; exit 1; }
-# shellcheck source=../opencreator-os/lib.sh
+# shellcheck source-path=SCRIPTDIR source=../opencreator-os/lib.sh
 . "$W/lib.sh"
 
 # lib.sh's log also writes to /usr/data; this test writes only to the stick.
@@ -69,12 +69,20 @@ for f in chainload.ko c5-chainload.sh kernel.uimage booting.raw refused.raw; do
 done
 log "usbtest: payload verified ($SUM) and copied to $W"
 
-if [ ! -f "$WPA" ]; then
+if [ -s "$T/wifi.conf" ] && [ "$(head -n 1 "$T/wifi.conf" | tr -d '\r')" != "$WIFI_CONF_AUTO" ]; then
+	log "usbtest: using the hand-written opencreator-os-test/wifi.conf on the stick"
+elif [ ! -f "$WPA" ]; then
 	log "usbtest: $WPA not found; OpenWrt will have no Wi-Fi"
-elif ssid=$(wifi_conf "$WPA" "$T/wifi.conf"); then
-	log "usbtest: Wi-Fi '$ssid' written to the stick (opencreator-os-test/wifi.conf; delete it after the test)"
 else
-	log "usbtest: no usable network block in $WPA; OpenWrt will have no Wi-Fi"
+	# SSIDs and flags only, never keys
+	wpa_blocks "$WPA" | while IFS="$(printf '\t')" read -r n dis pri ssid key; do
+		log "usbtest: $WPA network $n: ssid $(ssid_value "$ssid") disabled=$dis priority=$pri key=$([ -n "$key" ] && echo yes || echo no)"
+	done
+	if ssid=$(wifi_conf "$WPA" "$T/wifi.conf"); then
+		log "usbtest: Wi-Fi '$ssid' written to the stick (opencreator-os-test/wifi.conf; delete it after the test)"
+	else
+		log "usbtest: no usable network block in $WPA; OpenWrt will have no Wi-Fi"
+	fi
 fi
 
 if ! out=$(C5CL_EXTRA=c5.usbtest=1 sh "$W/c5-chainload.sh" stage "$ROOTDEV" "$W/kernel.uimage" 2>&1); then
