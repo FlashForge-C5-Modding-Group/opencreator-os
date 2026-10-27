@@ -60,7 +60,7 @@ mkdir -p "$OW/target/linux/x2600"
 (cd "$REPO/feed/x2600" && tar -cf - .) | tar -xf - -C "$OW/target/linux/x2600" --no-same-permissions
 find "$OW/target/linux/x2600" -type d -exec chmod 0755 {} + -o -type f -exec chmod 0644 {} +
 git -C "$REPO" ls-files -s feed/x2600 | awk '$1 == "100755" { sub(/^feed\/x2600\//, "", $4); print $4 }' |
-	while IFS= read -r f; do chmod 0755 "$OW/target/linux/x2600/$f"; done
+	while IFS= read -r f; do [ ! -e "$OW/target/linux/x2600/$f" ] || chmod 0755 "$OW/target/linux/x2600/$f"; done
 # Extra patches for OpenWrt packages, needed because the vendor kernel is
 # older than the 6.6 release OpenWrt targets. Mirrors the OpenWrt tree layout.
 log "sync openwrt-patches"
