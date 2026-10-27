@@ -1,0 +1,41 @@
+From: opencreator-os
+Subject: [PATCH] watchdog: ingenic: program the timer on open and timeout changes
+
+The SDK start operation enables an unconfigured counter. Its timeout
+comparison also skips every change after the first one. Program the
+initial timeout and compare the requested value, so procd can feed a
+properly configured watchdog. The hardware limit is 2047 seconds.
+
+--- a/module_drivers/drivers/watchdog/ingenic_wdt.c
++++ b/module_drivers/drivers/watchdog/ingenic_wdt.c
+@@ -134,7 +134,7 @@ static int ingenic_wdt_set_timeout(struct watchdog_device *wdt_dev,
+ 	unsigned int timeout_value;
+ 	short clock_div = INGENIC_WDT_CLOCK_DIV_1;
+ 
+-	if (drvdata->timeout != wdt_dev->timeout) {
++	if (drvdata->timeout != new_timeout) {
+ 
+ 		writeb(0x0, drvdata->base + INGENIC_REG_WDT_COUNTER_ENABLE);
+ 		rtc_clk_rate = clk_get_rate(drvdata->wdt_clk);
+@@ -168,9 +168,9 @@ static int ingenic_wdt_set_timeout(struct watchdog_device *wdt_dev,
+ static int ingenic_wdt_start(struct watchdog_device *wdt_dev)
+ {
+ 	struct ingenic_wdt_drvdata *drvdata = watchdog_get_drvdata(wdt_dev);
++	ingenic_wdt_set_timeout(wdt_dev, wdt_dev->timeout);
+ 	writel(INGENIC_WDT_TIMER_FLAG, drvdata->base + INGENIC_REG_WDT_TIMER_FLAG_CLR);
+ 	writeb(0x1, drvdata->base + INGENIC_REG_WDT_COUNTER_ENABLE);
+-	//ingenic_wdt_set_timeout(wdt_dev, wdt_dev->timeout);
+ 
+ 	return 0;
+ }
+--- a/module_drivers/drivers/watchdog/ingenic_wdt.h
++++ b/module_drivers/drivers/watchdog/ingenic_wdt.h
+@@ -48,7 +48,7 @@
+ #define INGENIC_WDT_CLOCK_DIV_1024 (5 << INGENIC_WDT_CLOCK_DIV_SHIFT)
+ 
+ #define DEFAULT_HEARTBEAT (15)
+-#define MAX_HEARTBEAT     (2047 * 1000)
++#define MAX_HEARTBEAT     (2047)
+ 
+ /*ingenic watchdog drvdata struct*/
+ struct ingenic_wdt_drvdata {

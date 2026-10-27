@@ -52,9 +52,18 @@
 
 	/*
 	 * Left to userspace, as in stock: PC11 heartbeat (toggled at 1 Hz by
-	 * c5-heartbeat), PB17/PB18 (MCU reset/boot pins for flashing),
-	 * PC14 backlight and the KX070 panel and GT9xx touch (later milestone).
+	 * c5-heartbeat), PB17/PB18 (MCU reset/boot pins for flashing).
 	 */
+
+	backlight {
+		compatible = "gpio-backlight";
+		gpios = <&gpc 14 GPIO_ACTIVE_HIGH INGENIC_GPIO_NOBIAS>;
+		default-on;
+	};
+
+	panel {
+		compatible = "ingenic,kx070";
+	};
 };
 
 &pinctrl {
@@ -105,14 +114,41 @@
 
 /* ---- I2C ---- */
 
-/* Touch is a later milestone; stock drives i2c0 from an out-of-tree module. */
+/* Stock soc_i2c uses PC00/PC01 at 400 kHz. */
 &i2c0 {
-	status = "disabled";
+	status = "okay";
+	clock-frequency = <400000>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c0_pc>;
+
+	touchscreen@14 {
+		compatible = "goodix,gt911";
+		reg = <0x14>;
+		interrupt-parent = <&gpc>;
+		interrupts = <7 IRQ_TYPE_EDGE_FALLING INGENIC_GPIO_PULLUP>;
+		irq-gpios = <&gpc 7 GPIO_ACTIVE_HIGH INGENIC_GPIO_PULLUP>;
+		reset-gpios = <&gpc 8 GPIO_ACTIVE_HIGH INGENIC_GPIO_NOBIAS>;
+		/* Stock reports landscape coordinates without flips or exchange. */
+		touchscreen-size-x = <800>;
+		touchscreen-size-y = <480>;
+	};
 };
 
 /* DEVIATION: stock leaves i2c3 enabled with no pin group and no clients. */
 &i2c3 {
 	status = "disabled";
+};
+
+/* SDK driver defaults to 15 s; procd requests its own timeout. */
+&watchdog {
+	status = "okay";
+};
+
+/* KX070 timings live in the SDK panel driver; stock uses LVDS, not PB RGB. */
+&dpu {
+	status = "okay";
+	ingenic,disable-rdma-fb = <0>;
+	ingenic,rot_angle = <0>;
 };
 
 /* ---- eMMC: as stock ---- */
