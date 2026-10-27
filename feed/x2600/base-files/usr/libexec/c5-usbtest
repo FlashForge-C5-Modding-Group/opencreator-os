@@ -98,8 +98,17 @@ check() { # NAME DETAIL CONDITION...
 has_part() { partx -s -g -o NAME "$C5_DISK" 2>/dev/null | grep -qx "$1"; }
 emmc_ok() { for p in kernel rootfs kernel2 rootfs2 ota usershare userdata; do has_part "$p" || return 1; done; }
 uarts_ok() { for u in 2 4 5 7; do [ -c "/dev/ttyS$u" ] || return 1; done; }
-mounted_on() { awk -v d="$1" -v m="$2" '$1 == d && $2 == m { f = 1 } END { exit !f }' /proc/mounts; }
 data_ro() { awk '$2 == "/data" && $4 ~ /(^|,)ro(,|$)/ { f = 1 } END { exit !f }' /proc/mounts; }
+# /proc/mounts names the root /dev/root; match its major:minor instead.
+root_on_rom() {
+	local d m
+	d=$(c5_root_dev)
+	m=$(cat "/sys/class/block/${d#/dev/}/dev" 2>/dev/null) || return 1
+	# optional fields vary in number; the filesystem type follows the "-"
+	awk -v m="$m" '$5 == "/rom" && $3 == m {
+		for (i = 7; i < NF; i++) if ($i == "-") { if ($(i + 1) == "squashfs") f = 1; break } }
+		END { exit !f }' /proc/self/mountinfo
+}
 hb_toggles() { case "$hb" in *0*1* | *1*0*) return 0 ;; esac; return 1; }
 wifi_usb() { grep -q ' 0bda:c811' "$OUT/final/usb.txt"; }
 wifi_if() { ls /sys/class/ieee80211/* > /dev/null 2>&1; }
@@ -110,7 +119,7 @@ res INFO version "$(. /etc/openwrt_release; echo "$DISTRIB_ID $DISTRIB_RELEASE")
 res INFO cmdline "$(cat /proc/cmdline)"
 res INFO cpus "online $(cat /sys/devices/system/cpu/online)"
 res INFO flag "'$(c5_flag_read)' (read only; the test never writes it)"
-check root "/dev/sda2 squashfs at /rom" mounted_on "$(c5_root_dev)" /rom
+check root "$(c5_root_dev) squashfs at /rom" root_on_rom
 # shellcheck disable=SC2016 # awk program
 check overlay "/ is overlayfs" awk '$2 == "/" && $3 == "overlay" { f = 1 } END { exit !f }' /proc/mounts
 check emmc "GPT names on $C5_DISK" emmc_ok
