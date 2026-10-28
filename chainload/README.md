@@ -128,7 +128,12 @@ sh c5-chainload.sh go                       # no return; SSH drops
 - Builds the new command line from `/proc/cmdline`: it replaces `root=`,
   keeps `init=/linuxrc`, `rootfstype=squashfs`, `mem=`/`rmem=` and the
   rest (minus any `c5.*` words), and appends `rootwait` and
-  `ieee754=relaxed` if they are missing.
+  `ieee754=relaxed` if they are missing. The OpenWrt kernel puts its
+  built-in prefix (`CONFIG_CMDLINE`, with `console=tty0 fbcon=rotate:3` for
+  the boot log on the panel) in front of this line as it does in front of
+  the SPL's, so a test boot shows the same screen console. Adding
+  `console=tty0` here would put it after `console=ttyS0` and make the panel
+  `/dev/console`.
 - Decides whether a healthy test boot may commit the slot (make it the SPL's
   boot slot; OpenWrt's `c5-booted` does that). This is allowed only when
   `ROOTDEV` is the GPT `rootfs`/`rootfs2` partition (looked up with

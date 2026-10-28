@@ -68,8 +68,30 @@ describe`), and runs `make`. Options: `--menuconfig`, `--kernel-menuconfig`,
   `module_drivers/dts/Makefile`). It includes `x2600.dtsi`, the same as the
   SDK's `x2600_module_base_mmc0.dts`.
 - Command line: `CONFIG_MIPS_CMDLINE_BUILTIN_EXTEND` puts
-  `CONFIG_CMDLINE="ieee754=relaxed"` in front of the SPL's argv (copied into
-  `arcs_cmdline` by `arch/mips/xburst2/core/prom.c`).
+  `CONFIG_CMDLINE="ieee754=relaxed console=ttyS0,115200n8 console=tty0 fbcon=rotate:3"`
+  in front of the SPL's argv (copied into `arcs_cmdline` by
+  `arch/mips/xburst2/core/prom.c`; `bootcmdline_init()` in
+  `arch/mips/kernel/setup.c` copies the built-in string first, then appends
+  `arcs_cmdline`). A chainload test boot passes its line the same way
+  (`a0` = argc, `a1` = argv), so both boot paths get the prefix from the
+  kernel; `c5-chainload.sh` adds nothing for it.
+- Boot log on the panel: `CONFIG_FRAMEBUFFER_CONSOLE` on the VT
+  (`CONFIG_VT_CONSOLE`), only the 8x16 font (100x30 characters landscape),
+  `CONFIG_FRAMEBUFFER_CONSOLE_ROTATION` for `fbcon=rotate:3`: the text is
+  drawn rotated 90° counter-clockwise in the portrait 480x800 framebuffer,
+  the same mapping as the os-installer app's LVGL `LV_DISP_ROT_90`
+  (UI x runs up the framebuffer, UI y to the right). No logo. Console order:
+  the kernel keeps the first options and position of a repeated `console=`
+  and makes the last one `/dev/console`, so the SPL's
+  `console=ttyS0,115200n8` stays the primary console and `tty0` only mirrors
+  printk. The leading `console=ttyS0,115200n8` keeps procd on serial: procd
+  takes the first `console=` word for its shutdown output, and `askconsole`
+  uses `/dev/console` (ttyS0) when there are several. No login runs on tty0.
+  `loglevel=8` comes from the SPL after the prefix and stays: the panel
+  shows everything serial shows. `CONFIG_VT_HW_CONSOLE_BINDING` lets the
+  stick's `runFirmwareExe.sh` unbind fbcon (`/sys/class/vtconsole/vtconN/bind`)
+  while the os-installer app draws and bind it again afterwards. Not yet
+  seen on hardware.
 - `make zImage` produces `arch/mips/boot/compressed/zImage` (self-extracting,
   linked at `0x80f00000`); OpenWrt picks it up through `IMAGES_DIR:=compressed`
   and wraps it with `mkimage` into a legacy uImage, load = entry =
@@ -91,7 +113,7 @@ describe`), and runs `make`. Options: `--menuconfig`, `--kernel-menuconfig`,
 - Display/touch bring-up is in progress. Even with the framebuffer and
   Goodix drivers configured, use the installer headless on OpenWrt until
   display bring-up is verified on hardware; the stock touchscreen flow is
-  separate.
+  separate. The kernel's boot log on the panel (above) needs no app.
 
 ### Regenerating `feed/x2600/config-6.6`
 
@@ -105,7 +127,10 @@ cp /tmp/kcfg/.config feed/x2600/config-6.6
 
 `mkconfig.sh` merges the fragment onto the defconfig, runs `olddefconfig` and
 fails if any fragment line did not survive. After a full OpenWrt build,
-`make kernel_oldconfig` in the OpenWrt tree re-normalises the file.
+`make kernel_oldconfig` in the OpenWrt tree re-normalises the file. OpenWrt
+builds the tree in place, so after a build `O=` refuses it ("source tree is
+not clean"); run `mkconfig.sh` on a copy cleaned with
+`make ARCH=mips mrproper` instead.
 
 ## Packages
 
