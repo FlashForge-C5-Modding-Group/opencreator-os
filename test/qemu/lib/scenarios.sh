@@ -333,6 +333,7 @@ shell 400
 run 600 waitboot i=0; until dmesg | grep -q 'c5: booted:'; do i=$((i+1)); [ $i -lt 300 ] || break; sleep 2; done; dmesg | grep 'c5: '
 run 30 board cat /tmp/sysinfo/board_name
 run 30 hostname uci set system.@system[0].hostname=c5test && uci commit system && uci get system.@system[0].hostname
+run 30 wifi printf "SSID='S5 Edited'\nPSK='s5-edited-123'\n" > /etc/c5/wifi.conf && cat /etc/c5/wifi.conf
 run 30 before head -c 11 /dev/mmcblk0p5 | tr -d '\000'; echo; head -c 1048576 /dev/mmcblk0p2 | sha256sum
 run 120 garbage dd if=/dev/urandom of=/tmp/garbage.bin bs=1k count=64 2>/dev/null; sysupgrade -v /tmp/garbage.bin; echo "sysupgrade-rc=$?"
 run 30 after head -c 11 /dev/mmcblk0p5 | tr -d '\000'; echo; head -c 1048576 /dev/mmcblk0p2 | sha256sum
@@ -367,10 +368,12 @@ EOF
 	steps_openwrt "$st" <<'EOF'
 run 30 version cat /etc/qemu-test-version
 run 30 hostname uci get system.@system[0].hostname
+run 30 wificonf cat /etc/c5/wifi.conf
 EOF
 	boot s5-c "$DISK" "$(chainload_cmdline s5-b)" "$st"
 	check "new root is running (/etc/qemu-test-version)" res_has s5-c version '^qemu-v2-'
 	check "hostname preserved through sysupgrade" res_has s5-c hostname '^c5test$'
+	check "wifi.conf edited before sysupgrade kept (keep.d)" res_has s5-c wificonf "^SSID='S5 Edited'"
 	# the bootlog, not waitboot's dmesg: that returns on the first "booted:"
 	# line and can miss the "committed" line logged right after it
 	check "c5-booted committed the sysupgrade" bash -c "printf '%s' \"\$1\" | grep -q 'booted: committed sysupgrade'" _ "$(img_bootlog "$DISK")"

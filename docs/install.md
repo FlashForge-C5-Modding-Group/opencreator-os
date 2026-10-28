@@ -215,7 +215,9 @@ The fixed `/etc/config/fstab` mounts ext4 label `c5os` at `/data` with
 `model`, `wifi.conf`, optional `authorized_keys`, `good-kernel`,
 `pending-commit`, `sysupgrade.tgz` and `logs/`. Preinit imports settings
 only from `c5os` into `/etc/c5/` and `/etc/dropbear/` if the destination is
-not already populated. It also stages the saved sysupgrade configuration.
+not already populated. It also stages the saved sysupgrade configuration,
+which includes `/etc/c5/` (`/lib/upgrade/keep.d/c5`), so a `wifi.conf`
+edited on OpenWrt survives a sysupgrade.
 OpenWrt mounts `userdata` only briefly to repair stock or stage a changed
 kernel for stock's `c5-chainload.sh`.
 
