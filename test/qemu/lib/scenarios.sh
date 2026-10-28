@@ -953,7 +953,33 @@ scenario_S15() {
 	fi
 }
 
-ALL_SCENARIOS="S1 S2 S3 S4 S5 S6 S7 S8 S9 S10 S12 S13 S14 S15"
+# S16: a USB Ethernet adapter plugged in at boot (QEMU usb-net instead of the
+# PCI NIC): the image's kmod-usb-net autoload entries load usbnet/cdc_ether
+# (the QEMU kernel's builds of them), the adapter is eth0 and br-lan gets a
+# DHCP lease through it. Also: the Wi-Fi client runs wpa_supplicant alone.
+scenario_S16() {
+	if [ "${QEMU_REFRESH_ROOTFS:-1}" = 0 ]; then
+		SKIP_WHY="needs the QEMU kernel's USB Ethernet modules laid over the root (QEMU_REFRESH_ROOTFS=1)"
+		return 77
+	fi
+	new_disk
+	prepare_committed || return 0
+	local st=$RUN/s16.steps
+	steps_openwrt "$st" <<'EOF'
+run 30 lsmod lsmod
+run 30 eth0drv basename "$(readlink /sys/class/net/eth0/device/driver)"
+run 90 lease i=0; until ip -4 addr show dev br-lan | grep -q 'inet 10\.0\.2\.15/'; do i=$((i+1)); [ $i -lt 60 ] || exit 1; sleep 1; done; ip -4 addr show dev br-lan
+run 30 wifiprocs for p in wpa_supplicant hostapd urngd; do echo "$p=$(pidof $p >/dev/null && echo running || echo none)"; done
+EOF
+	QEMU_USB_NIC=1 boot s16 "$DISK" "$(spl_root "$DISK")" "$st"
+	check "healthy boot with the USB NIC" res_has s16 waitboot 'booted: slot 1 healthy'
+	check "usbnet and cdc_ether loaded at boot" bash -c "printf '%s\n' \"\$1\" | grep -q '^cdc_ether ' && printf '%s\n' \"\$1\" | grep -q '^usbnet '" _ "$(res_out "$RUN/s16.res" lsmod)"
+	check "the adapter is eth0 (cdc_ether)" is_eq "$(res_out "$RUN/s16.res" eth0drv | tr -d '\r' | tail -n 1)" cdc_ether
+	check "br-lan gets a DHCP lease through it" res_ok s16 lease
+	check "wpa_supplicant runs, no hostapd, no urngd" is_eq "$(res_out "$RUN/s16.res" wifiprocs | tr -d '\r' | paste -sd' ')" "wpa_supplicant=running hostapd=none urngd=none"
+}
+
+ALL_SCENARIOS="S1 S2 S3 S4 S5 S6 S7 S8 S9 S10 S12 S13 S14 S15 S16"
 # the scenario whose image prepare_committed reuses (run.sh -j starts the
 # scenarios that call prepare_committed after it)
 COMMITTED_BY=S2

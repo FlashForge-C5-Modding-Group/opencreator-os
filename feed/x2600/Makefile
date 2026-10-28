@@ -26,10 +26,15 @@ include $(INCLUDE_DIR)/target.mk
 # would start).
 DEFAULT_PACKAGES := $(filter-out mtd urngd,$(DEFAULT_PACKAGES))
 # wpa-supplicant-mbedtls: client only (no hostapd process), with WPA3-SAE,
-# OWE, Suite-B 192 and 802.11r/w.
+# OWE, Suite-B 192 and 802.11r/w. USB Ethernet adapters (CDC ECM/NCM,
+# Realtek, ASIX) and the internal UVC camera are kmods; kmod-video-uvc
+# depends on, but does not select, kmod-video-core.
 DEFAULT_PACKAGES += dropbear block-mount partx-utils e2fsprogs \
 	kmod-usb-serial kmod-usb-serial-ch341 kmod-usb-serial-cp210x \
 	kmod-usb-serial-ftdi kmod-usb-acm \
+	kmod-usb-net-cdc-ether kmod-usb-net-cdc-ncm kmod-usb-net-rtl8152 \
+	kmod-usb-net-asix kmod-usb-net-asix-ax88179 \
+	kmod-video-core kmod-video-uvc \
 	wpa-supplicant-mbedtls kmod-rtw88-8821cu rtl8821ce-firmware iwinfo \
 	openssh-sftp-server
 

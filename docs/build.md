@@ -183,3 +183,11 @@ Packages come from `DEFAULT_PACKAGES` in `feed/x2600/Makefile` (plus
   run only on stock.
 - No `urngd`: on the printer the kernel logs `random: crng init done` at
   3.9 s, during preinit, and urngd only started at 11.9 s.
+- USB Ethernet adapters: `kmod-usb-net-cdc-ether`, `-cdc-ncm`, `-rtl8152`,
+  `-asix`, `-asix-ax88179`. Like every OpenWrt kmod (and the USB serial
+  ones) they are loaded at boot by `kmodloader`, not on plug. The board has
+  no Ethernet MAC, so an adapter is `eth0`, which `02_network` puts in
+  `br-lan` with DHCP; it gets an address when plugged in. An adapter that
+  registers as `usb0` (a CDC device with a locally administered MAC, such as
+  a phone) is not configured.
+- Camera: `kmod-video-uvc` for the internal UVC camera (`05a3:9230`).

@@ -253,15 +253,16 @@ build_c5os_disk() {
 }
 
 # OpenWrt root used by the tests: the build's root.squashfs, by default with
-# the working tree's feed/x2600/base-files laid over it (QEMU_REFRESH_ROOTFS=0
-# tests the build artifact unchanged).
+# the working tree's feed/x2600/base-files and the QEMU kernel's USB Ethernet
+# modules laid over it (QEMU_REFRESH_ROOTFS=0 tests the build artifact
+# unchanged).
 build_openwrt_fixture() {
 	local src=$OWRT_ART-root.squashfs key stage
 	[ -s "$src" ] || return 1
 	if [ "${QEMU_REFRESH_ROOTFS:-1}" = 0 ]; then
 		key=artifact-$(stat -c %Y-%s "$src")
 	else
-		key=refresh-$(stat -c %Y-%s "$src")-$( { declare -f build_openwrt_fixture; cd "$QREPO/feed/x2600/base-files" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum; } | sha256sum | cut -c1-16)
+		key=refresh-$(stat -c %Y-%s "$src")-${VMLINUX##*/}-$( { declare -f build_openwrt_fixture; cd "$QREPO/feed/x2600/base-files" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum; } | sha256sum | cut -c1-16)
 	fi
 	if [ -s "$OWRT_SQFS" ] && [ "$(cat "$OWRT_SQFS.key" 2>/dev/null)" = "$key" ]; then
 		return 0
@@ -295,6 +296,10 @@ build_openwrt_fixture() {
 		for f in "$stage"/etc/rc.d/*c5*; do
 			[ -e "$f" ] || rm -f "$f"
 		done
+		# the QEMU kernel's usbnet/cdc_ether (kernel/build.sh): the image's
+		# kmod-usb-net autoload entries load them at boot (S16)
+		mkdir -p "$stage/lib/modules/$KVER"
+		cp "$VMLINUX.modules"/*.ko "$stage/lib/modules/$KVER/"
 		mksquashfs "$stage" "$OWRT_SQFS" -noappend -all-root -quiet -comp xz -b 256k \
 			-p '/dev/console c 600 0 0 5 1' >/dev/null
 	fi
@@ -399,19 +404,29 @@ boot() {
 	esac
 	# User-mode networking provides the normal LAN/DHCP environment; boot
 	# health itself depends only on reaching c5-booted with c5os mounted.
+	# QEMU_USB_NIC=1 replaces the PCI NIC with a USB Ethernet adapter on xHCI
+	# (usb-net, CDC Ethernet, globally administered MAC): as on the printer,
+	# which has no Ethernet MAC, the adapter becomes eth0.
 	# QEMU's sd-card reads and writes the image one 512-byte block at a time,
 	# synchronously; io_uring makes each of those about twice as fast as the
 	# default thread pool (S12's whole-eMMC backup is bound by it).
 	q=(qemu-system-mipsel -M malta -cpu "$QEMU_CPU" -m "$QEMU_MEM" -kernel "$VMLINUX"
 		-append "$cl"
 		-display none -monitor none -serial stdio -no-reboot
-		-nic user,model=pcnet,restrict=on
 		-drive "if=none,id=emmc,file=$disk,format=raw,aio=$QEMU_AIO"
 		-device sdhci-pci -device sd-card,drive=emmc)
+	if [ -n "$stick" ] || [ "${QEMU_USB_NIC:-0}" = 1 ]; then
+		q+=(-device qemu-xhci,id=xhci)
+	fi
+	if [ "${QEMU_USB_NIC:-0}" = 1 ]; then
+		q+=(-netdev user,id=usbnic,restrict=on -device usb-net,bus=xhci.0,netdev=usbnic,mac=00:16:3e:c5:00:01)
+	else
+		q+=(-nic user,model=pcnet,restrict=on)
+	fi
 	# the stick sits on xHCI: UHCI's ~1 MB/s is too slow for S12's backup
 	[ -n "$stick" ] && q+=(-drive "if=none,id=stick,file=$stick,format=raw,aio=$QEMU_AIO"
-		-device qemu-xhci,id=xhci -device usb-storage,bus=xhci.0,drive=stick)
-	say "boot $BOOTN '$name': $(echo "$cl" | grep -o 'root=[^ ]*')$(echo " $cl" | grep -o ' c5\.[^ ]*' | tr -d '\n') flag='$(img_flag "$disk")'${stick:+ stick=${stick##*/}}"
+		-device usb-storage,bus=xhci.0,drive=stick)
+	say "boot $BOOTN '$name': $(echo "$cl" | grep -o 'root=[^ ]*')$(echo " $cl" | grep -o ' c5\.[^ ]*' | tr -d '\n') flag='$(img_flag "$disk")'${stick:+ stick=${stick##*/}}$([ "${QEMU_USB_NIC:-0}" = 1 ] && echo ' usb-nic')"
 	: > "$RUN/$name.res"
 	: > "$RUN/$name.log"
 	python3 "$QDIR/lib/qemu-run.py" --log "$RUN/$name.log" --results "$RUN/$name.res" \

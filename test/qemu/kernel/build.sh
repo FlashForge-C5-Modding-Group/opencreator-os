@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build the mainline Linux kernel used by the QEMU system tests (malta,
-# MIPS32r2 little-endian, everything built in) into $QWORK/vmlinux-$KVER.
+# MIPS32r2 little-endian, everything built in) into $QWORK/vmlinux-$KVER, and
+# the USB Ethernet modules malta.config leaves as modules into $VMLINUX.modules/.
 #
 #   test/qemu/kernel/build.sh [--force]
 #
@@ -11,9 +12,11 @@ set -euo pipefail
 # shellcheck source=../lib/env.sh
 . "$(dirname "$0")/../lib/env.sh"
 
+KMODS="drivers/net/usb/usbnet.ko drivers/net/usb/cdc_ether.ko"
+
 FORCE=0
 [ "${1:-}" = --force ] && FORCE=1
-if [ "$FORCE" = 0 ] && [ -s "$VMLINUX" ]; then
+if [ "$FORCE" = 0 ] && [ -s "$VMLINUX" ] && [ -s "$VMLINUX.modules/cdc_ether.ko" ]; then
 	echo "kernel: $VMLINUX exists"
 	exit 0
 fi
@@ -61,8 +64,15 @@ done < "$FRAG"
 
 echo "kernel: building Linux $KVER with ${CC_PREFIX}gcc"
 "${KMAKE[@]}" vmlinux
+# shellcheck disable=SC2086
+"${KMAKE[@]}" $KMODS
+rm -rf "$VMLINUX.modules"
+mkdir -p "$VMLINUX.modules"
+for m in $KMODS; do
+	cp "$OBJ/$m" "$VMLINUX.modules/"
+done
 cp "$OBJ/vmlinux" "$VMLINUX.tmp"
 mv "$VMLINUX.tmp" "$VMLINUX"
-# kernels of older fragment/script versions
-find "$QWORK" -maxdepth 1 -name "vmlinux-$KVER-*" ! -path "$VMLINUX" -delete
+# kernels (and their modules) of older fragment/script versions
+find "$QWORK" -maxdepth 1 -name "vmlinux-$KVER-*" ! -path "$VMLINUX" ! -path "$VMLINUX.modules" -exec rm -rf {} +
 echo "kernel: $VMLINUX"
