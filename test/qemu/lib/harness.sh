@@ -316,7 +316,7 @@ make_payload() {
 # make_ui_payload OUTDIR "KEY=VALUE ..." [make-install-stick.sh options]:
 # make_payload, with the stick hook replaced by fixtures/qemu-ui-hook.sh,
 # which runs the installer with --ui against fixtures/fake-ui.sh configured
-# by the given ui.conf settings (menu=N, confirm_<id>=ok|early|cancel).
+# by the given ui.conf settings (menu=N, menu_<id>=N, confirm_<id>=ok|early|cancel).
 make_ui_payload() {
 	local out=$1 conf=$2
 	shift 2

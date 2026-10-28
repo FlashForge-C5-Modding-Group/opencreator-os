@@ -3,7 +3,8 @@
 # installer's screen requests on stdin, writes ANSWER lines on stdout and
 # echoes every input line to the console as "QEMU-UI <line>".
 # Settings, from ui.conf next to this script (KEY=VALUE per line):
-#   menu=N                         answer to MENU main (default 1)
+#   menu=N                         answer to every MENU (default 1)
+#   menu_<id>=N                    answer to MENU <id>, before menu=
 #   confirm_<id>=ok|early|cancel   ok: wait out the button delay, then ok;
 #                                  early: ok at once; cancel (default ok)
 # BLOCK with a button ("TEXT|BUTTON") taps it: exit 1, as the app does;
@@ -20,7 +21,8 @@ while IFS= read -r line; do
 	set +f
 	case "${1:-}" in
 	MENU)
-		m=$(get menu)
+		m=$(get "menu_$2")
+		[ -n "$m" ] || m=$(get menu)
 		printf 'ANSWER %s %s\n' "$2" "${m:-1}"
 		;;
 	CONFIRM)

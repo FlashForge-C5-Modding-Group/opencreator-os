@@ -115,7 +115,8 @@ prepare_committed() {
 # ------------------------------------------------------------- scenarios --
 
 # S1: default (headless) install from the stock USB hook; no good kernel yet,
-# so it ends in a chainload test boot of slot 1.
+# so it ends in a chainload test boot of slot 1. Then the test kernel
+# "hangs": the watchdog reset boots stock, whose run of the stick reports it.
 scenario_S1() {
 	new_disk
 	flow_install s1-stock || return 0
@@ -144,9 +145,21 @@ PSK='qemu-psk-'\\''quoted'\\''-123'"
 	check "hook model stored on c5os" is_eq "$(c5os_cat "$DISK" $ow/model)" "Creator5Pro 0029"
 	check "credentials not copied to userdata" bash -c "! debugfs -R 'stat $ow/wifi.conf' '$(userdata_spec "$DISK")' 2>/dev/null | grep -q '^Inode:'"
 	check "first install has matching pending commit" is_eq "$(c5os_cat "$DISK" $ow/pending-commit)" "slot=1"
+	check "last-test: started before the jump" is_eq "$(c5os_cat "$DISK" $ow/last-test)" "started qemu-test"
+
+	# the fake jump powered off without booting anything: what a hung test
+	# kernel leaves after the watchdog reset; the SPL boots stock
+	steps_stock "$RUN/s1-hang.steps"
+	boot s1-hang "$DISK" "$(spl_root "$DISK")" "$RUN/s1-hang.steps" "$RUN/stick-s1-stock.img"
+	check "hang: next stock run reports it" log_has s1-hang '^test: the OpenWrt test boot \(qemu-test\) failed: hung before OpenWrt started \(watchdog reset\); stock is unchanged'
+	check "hang: report in the stick log" bash -c "mtype -i '$RUN/stick-s1-stock.img@@1M' ::opencreator-os-install.log | grep -q 'hung before OpenWrt started'"
+	check "hang: reported once (last-test.seen)" is_eq "$(c5os_cat "$DISK" $ow/last-test.seen):$(c5os_has "$DISK" $ow/last-test && echo left)" "started qemu-test:"
+	check "hang: headless stick does not retry" log_has s1-hang 'switch: this stick already started OpenWrt in slot 1'
+	check "hang: stock boots on, flag on stock" is_eq "$(grep -c '^QEMU-STOCK-HOOK continue' "$RUN/s1-hang.log"):$(img_flag "$DISK")" "1:ota:kernel2"
 }
 
-# S2: default install -> fake jump -> OpenWrt from p2, committed.
+# S2: default install -> fake jump -> OpenWrt from p2 with the stick still
+# in, committed; the deferred USB hook then reports the install (headless).
 scenario_S2() {
 	new_disk
 	flow_install s2-stock || return 0
@@ -162,17 +175,24 @@ run 30 fstab uci -q get fstab.data.label; uci -q get fstab.data.target
 run 30 hostname uci -q get system.@system[0].hostname
 run 30 logs ls /data/opencreator-os/logs/
 run 30 overlay mount | grep -E ' on /overlay | on / '
+run 30 deadline ps w | grep '[c]5_test_deadline'
+run 300 hook i=0; until [ -f /data/opencreator-os/last-test.seen ]; do i=$((i+1)); [ $i -lt 150 ] || exit 1; sleep 2; done; cat /data/opencreator-os/last-test.seen; logread | grep -E 'c5-usb-hook|test: '
 EOF
-	boot s2-openwrt "$DISK" "$(chainload_cmdline s2-stock)" "$st"
+	boot s2-openwrt "$DISK" "$(chainload_cmdline s2-stock)" "$st" "$RUN/stick-s2-stock.img"
 	check "OpenWrt shell reached and c5-booted ran" res_has s2-openwrt waitboot 'c5: booted:'
-	check "preinit counted the boot without changing the flag" res_has s2-openwrt waitboot 'c5: bootcount: slot 1 booting; tries=1/3; flag untouched'
+	check "preinit: test boot not counted, deadline armed" res_has s2-openwrt waitboot 'c5: bootcount: slot 1 test boot; counter and flag untouched; healthy within 180 s or back to stock'
+	check "deadline job from preinit still runs after c5-booted" res_ok s2-openwrt deadline
 	check "c5-booted committed slot 1" res_has s2-openwrt waitboot 'c5: booted: .*flag -> slot 1 \(OpenWrt\)'
 	check "flag is now ota:kernel" is_eq "$(img_flag "$DISK")" ota:kernel
 	check "healthy boot reset tries" is_eq "$(img_tries "$DISK")" "C5TRIES1 0"
+	check "USB hook deferred at START=19 on the test boot" res_has s2-openwrt hook 'c5-usb-hook.*deferred until c5-booted'
+	check "c5-booted recorded last-test ok; the deferred hook's installer reported it" res_has s2-openwrt hook '^ok [^ ]+$'
+	check "installed report in the stick log (headless)" bash -c "mtype -i '$RUN/stick-s2-stock.img@@1M' ::opencreator-os-install.log | grep -q 'test: OpenWrt .* installed: the test boot succeeded and slot 1 is the boot system (no display)'"
+	check "last-test consumed" bash -c "! debugfs -R 'stat /opencreator-os/last-test' '$(c5os_spec "$DISK")' 2>/dev/null | grep -q '^Inode:'"
 	check "healthy kernel checksum saved on c5os" is_eq "$(c5os_cat "$DISK" /opencreator-os/good-kernel)" "$OW_K_SUM"
 	check "hostname derived from hook model" res_has s2-openwrt hostname '^creator5pro$'
 	check "bootlog records healthy boot" bash -c "printf '%s' \"\$1\" | grep -q 'booted: slot 1 healthy; good kernel recorded'" _ "$(img_bootlog "$DISK")"
-	check "bootlog order: bootcount before booted" bash -c "printf '%s\n' \"\$1\" | awk '/bootcount: slot 1 booting/{t=NR} /booted: .*flag -> slot 1/{b=NR} END{exit !(t && b && t < b)}'" _ "$(img_bootlog "$DISK")"
+	check "bootlog order: bootcount before booted" bash -c "printf '%s\n' \"\$1\" | awk '/bootcount: slot 1 test boot/{t=NR} /booted: .*flag -> slot 1/{b=NR} END{exit !(t && b && t < b)}'" _ "$(img_bootlog "$DISK")"
 	check "/rom is the squashfs root, / the overlay" res_has s2-openwrt mounts "^overlayfs:/overlay / overlay "
 	check "/overlay is ext4 on a loop device" res_has s2-openwrt mounts '^/dev/loop[0-9]+ /overlay ext4'
 	check "/data = c5os (mmcblk0p8)" res_has s2-openwrt mounts '^/dev/mmcblk0p8 /data ext4'
@@ -237,9 +257,14 @@ scenario_S4() {
 	boot s4-fallback "$DISK" "$(spl_root "$DISK")" "$st"
 	check "fourth preinit reboots into stock" is_eq "$(boot_outcome s4-fallback):$(img_flag "$DISK")" reboot:ota:kernel2
 	check "fallback resets counter" is_eq "$(img_tries "$DISK")" "C5TRIES1 0"
+	check "fallback records last-test on c5os" bash -c "printf '%s\n' \"\$1\" | grep -qxE 'failed [^ ]+ boot counter: 3 boots of slot 1 did not become healthy'" _ "$(c5os_cat "$DISK" /opencreator-os/last-test)"
+	make_payload "$RUN/payload-s4" || { fatal "make-install-stick.sh failed"; return 0; }
+	make_stick "$RUN/payload-s4" "$RUN/stick-s4.img"
 	steps_stock "$RUN/s4-stock.steps"
-	boot s4-stock "$DISK" "$(spl_root "$DISK")" "$RUN/s4-stock.steps"
+	boot s4-stock "$DISK" "$(spl_root "$DISK")" "$RUN/s4-stock.steps" "$RUN/stick-s4.img"
 	check "stock boots after three failed OpenWrt boots" log_has s4-stock '^QEMU-STOCK-DONE flag=ota:kernel2'
+	check "stock run of the stick reports the counter fallback" log_has s4-stock '^test: the OpenWrt test boot \([^)]+\) failed: boot counter: 3 boots of slot 1 did not become healthy; stock is unchanged'
+	check "counter report shown once (last-test.seen)" c5os_has "$DISK" /opencreator-os/last-test.seen
 
 	new_disk
 	prepare_committed || return 0
@@ -495,7 +520,7 @@ EOF
 	st=$RUN/s10-openwrt.steps
 	steps_openwrt "$st" < /dev/null
 	boot s10-openwrt "$DISK" "$(chainload_cmdline s10-stock)" "$st"
-	check "foreign chainload leaves counter and flag untouched" res_has s10-openwrt waitboot 'bootcount: slot 1 booting \(c5.nocommit=1\); counter and flag untouched'
+	check "foreign chainload leaves counter and flag untouched" res_has s10-openwrt waitboot 'bootcount: slot 1 test boot \(c5.nocommit=1\); counter and flag untouched'
 	check "foreign chainload does not start counter" is_eq "$(img_tries "$DISK")" ""
 	check "c5-booted did not commit (nocommit)" res_has s10-openwrt waitboot 'booted: chainloaded kernel is not slot 1.s own kernel \(c5\.nocommit=1\)'
 	check "flag still on stock" is_eq "$(img_flag "$DISK")" ota:kernel2
@@ -750,29 +775,45 @@ EOF
 	done
 }
 
-# S14: stock-side Swap and reinstall. Swap to OpenWrt with an untested
-# kernel test-boots it (recreating pending-commit) and the healthy boot
-# commits; Swap to stock; the disabled item when nothing is installed. A
-# headless stick that already started OpenWrt does not again; the same build
-# reinstalled from the app flips directly (known-good kernel).
+# S14: stock-side Swap and reinstall. The stock UI reports the hung first
+# test (Try again goes on to the menu). Swap to OpenWrt with an untested
+# kernel test-boots it (recreating pending-commit), the healthy boot commits
+# and, the stick still in, shows "OpenWrt installed" whose Reboot boots
+# OpenWrt again without it; Swap to stock; the disabled item when nothing is
+# installed. A headless stick that already started OpenWrt does not again;
+# the same build reinstalled from the app flips directly (known-good kernel).
 scenario_S14() {
 	local stick=$RUN/stick-s14.img st
 	new_disk
 	flow_install s14-install || return 0
 	check "install test-booted slot 1, flag left on stock" is_eq "$(boot_outcome s14-install):$(img_flag "$DISK")" "chainload:$OWRT_ROOT:ota:kernel2"
 	c5os_rm "$DISK" /opencreator-os/pending-commit
-	make_ui_payload "$RUN/payload-s14" "menu=2" || { fatal "make-install-stick.sh failed"; return 0; }
+	make_ui_payload "$RUN/payload-s14" "menu=2 menu_installed=1" || { fatal "make-install-stick.sh failed"; return 0; }
 	make_stick "$RUN/payload-s14" "$stick"
 	ui_stock_boot s14-a "$stick"
+	check "stock UI reports the hung test before the menu" log_has s14-a '^QEMU-UI CONFIRM test-failed 0 OpenWrt test failed\\nhung before OpenWrt started \(watchdog reset\)\\nStock is unchanged and boots normally\.\|Try again\|Boot to stock$'
+	check "Try again goes on to the menu" bash -c "grep -n -e '^QEMU-UI CONFIRM test-failed ' -e '^QEMU-UI MENU main ' \"\$1\" | cut -d' ' -f2 | tr '\n' ' ' | grep -qx 'CONFIRM MENU '" _ "$RUN/s14-a.log"
 	check "menu offers Swap to OpenWrt" bash -c "[[ \"\$1\" == *'|Swap to OpenWrt|-Uninstall (not yet available)' ]]" _ "$(ui_menu_line s14-a)"
 	check "untested kernel: swap test-boots slot 1" is_eq "$(boot_outcome s14-a)" "chainload:$OWRT_ROOT"
 	check "swap staged slot 1's own kernel (no c5.nocommit)" log_lacks s14-a '^QEMU-CHAINLOAD .*c5\.nocommit=1'
 	check "swap recreated pending-commit for slot 1" is_eq "$(c5os_cat "$DISK" /opencreator-os/pending-commit)" "slot=1"
+	check "swap: last-test started again, the hang report kept as seen" is_eq "$(c5os_cat "$DISK" /opencreator-os/last-test):$(c5os_cat "$DISK" /opencreator-os/last-test.seen)" "started qemu-test:started qemu-test"
 	check "flag stays on stock until the test boot commits" is_eq "$(img_flag "$DISK")" ota:kernel2
 	st=$RUN/s14-a-openwrt.steps
-	steps_openwrt "$st" < /dev/null
-	boot s14-a-openwrt "$DISK" "$(chainload_cmdline s14-a)" "$st"
+	printf 'expect 600 ^QEMU-UI MENU installed \nexpect 300 reboot: Restarting system\nwait-exit 240\n' > "$st"
+	boot s14-a-openwrt "$DISK" "$(chainload_cmdline s14-a)" "$st" "$stick"
 	check "healthy test boot committed: flag -> OpenWrt (ota:kernel)" is_eq "$(img_flag "$DISK")" ota:kernel
+	check "OpenWrt shows OpenWrt installed with one Reboot button" log_has s14-a-openwrt '^QEMU-UI MENU installed OpenWrt installed\\nThe test boot succeeded and OpenWrt is now the boot system\. Remove the USB stick, then tap Reboot\.\|Reboot$'
+	check "the screen comes after the commit" bash -c "awk '/c5: booted: committed/ && !c { c = NR } /c5: booted: last-test ok/ && !o { o = NR } /^QEMU-UI MENU installed / && !m { m = NR } END { exit !(c && o && m && c < o && o < m) }' \"\$1\"" _ "$RUN/s14-a-openwrt.log"
+	check "Reboot reboots" is_eq "$(boot_outcome s14-a-openwrt)" reboot
+	check "installed screen marked seen before the reboot" is_eq "$(c5os_cat "$DISK" /opencreator-os/last-test.seen | cut -d' ' -f1):$(c5os_has "$DISK" /opencreator-os/last-test && echo left)" "ok:"
+	make_ui_payload "$RUN/payload-s14-n" "menu=0" || { fatal "make-install-stick.sh failed"; return 0; }
+	make_stick "$RUN/payload-s14-n" "$RUN/stick-s14-n.img"
+	steps_openwrt "$RUN/s14-a-next.steps" < /dev/null
+	boot s14-a-next "$DISK" "$(spl_root "$DISK")" "$RUN/s14-a-next.steps" "$RUN/stick-s14-n.img"
+	check "next boot is OpenWrt (slot 1)" res_has s14-a-next cmdline 'root=/dev/mmcblk0p2'
+	check "next boot: the normal OpenWrt menu, no installed screen" is_eq "$(grep -cF 'QEMU-UI MENU main opencreator-os qemu-test\nOpenWrt slot 1|' "$RUN/s14-a-next.log"):$(grep -c '^QEMU-UI MENU installed' "$RUN/s14-a-next.log")" "1:0"
+	check "next boot keeps OpenWrt selected" is_eq "$(img_flag "$DISK")" ota:kernel
 
 	# stock running while the flag names OpenWrt (e.g. after a fallback)
 	st=$RUN/s14-b.steps
@@ -805,6 +846,64 @@ scenario_S14() {
 	check "same-build reinstall: known-good kernel, no test boot" log_has s14-reinstall 'switch: slot 1 kernel matches c5os good-kernel; no test boot'
 	check "same-build reinstall never chainloads" log_lacks s14-reinstall '^QEMU-CHAINLOAD '
 	check "same-build reinstall directly selects OpenWrt" is_eq "$(boot_outcome s14-reinstall):$(img_flag "$DISK")" reboot:ota:kernel
+	check "flip records last-test started" is_eq "$(c5os_cat "$DISK" /opencreator-os/last-test)" "started qemu-test"
 }
 
-ALL_SCENARIOS="S1 S2 S3 S4 S5 S6 S7 S8 S9 S10 S12 S13 S14"
+# S15: failed test boots return to stock by themselves and stock reports
+# them. c5os relabelled (OpenWrt cannot mount /data): c5-booted fails the
+# test at once; the stock UI says why, "Boot to stock" lets stock boot on.
+# A stall (C5_TEST_DEADLINE=10 on the command line) fails at the deadline.
+scenario_S15() {
+	local stick=$RUN/stick-s15.img ud tries st ow=/opencreator-os
+	new_disk
+	flow_install s15-install || return 0
+	check "install test-boots slot 1" is_eq "$(boot_outcome s15-install)" "chainload:$OWRT_ROOT"
+	debugfs -w -R "ssv volume_name notc5os" "$(c5os_spec "$DISK")" >/dev/null 2>&1
+	ud=$(img_part_sum "$DISK" 7 $((PSIZE[7] * 512)))
+	tries=$(img_tries "$DISK")
+	st=$RUN/s15-unhealthy.steps
+	printf 'expect 600 c5: test: rebooting into stock\nwait-exit 240\n' > "$st"
+	boot s15-unhealthy "$DISK" "$(chainload_cmdline s15-install)" "$st"
+	check "unhealthy: /data not mounted" log_has s15-unhealthy 'c5: booted: NOT healthy \(/data not mounted\)'
+	check "unhealthy: failed at once, flag -> stock" log_has s15-unhealthy 'c5: test: FAILED: c5os not mounted at /data; flag -> slot 2 \(stock\)'
+	check "unhealthy: reboot -f" is_eq "$(boot_outcome s15-unhealthy)" reboot
+	check "unhealthy: flag names stock" is_eq "$(img_flag "$DISK")" ota:kernel2
+	check "unhealthy: last-test failed with the reason" bash -c "printf '%s\n' \"\$1\" | grep -qxE 'failed [^ ]+ c5os not mounted at /data'" _ "$(c5os_cat "$DISK" $ow/last-test)"
+	check "unhealthy: pending-commit removed" bash -c "! debugfs -R 'stat $ow/pending-commit' '$(c5os_spec "$DISK")' 2>/dev/null | grep -q '^Inode:'"
+	check "unhealthy: no stock-invalid mark" stockinv_clear
+	check "unhealthy: counter untouched (test boots do not count)" is_eq "$(img_tries "$DISK")" "$tries"
+	check "unhealthy: stock slot and userdata untouched" is_eq "$(img_part_sum "$DISK" 3 $((PSIZE[3] * 512)))$(img_part_sum "$DISK" 4 $((PSIZE[4] * 512))):$(img_part_sum "$DISK" 7 $((PSIZE[7] * 512)))" "$BASE_P3$BASE_P4:$ud"
+	debugfs -w -R "ssv volume_name c5os" "$(c5os_spec "$DISK")" >/dev/null 2>&1
+
+	make_ui_payload "$RUN/payload-s15" "confirm_test-failed=cancel" || { fatal "make-install-stick.sh failed"; return 0; }
+	make_stick "$RUN/payload-s15" "$stick"
+	ui_stock_boot s15-report "$stick"
+	check "stock UI: OpenWrt test failed, with the reason" log_has s15-report '^QEMU-UI CONFIRM test-failed 0 OpenWrt test failed\\nc5os not mounted at /data\\nStock is unchanged and boots normally\.\|Try again\|Boot to stock$'
+	check "stock UI: Boot to stock skips the menu" log_lacks s15-report '^QEMU-UI MENU '
+	check "stock UI: stock boots on" is_eq "$(grep -c -e '^QEMU-STOCK-HOOK continue' -e '^QEMU-STOCK-DONE flag=ota:kernel2' "$RUN/s15-report.log")" 2
+	check "stock UI: shown once (last-test.seen)" bash -c "[ -z \"\$2\" ] && printf '%s\n' \"\$1\" | grep -qxE 'failed [^ ]+ c5os not mounted at /data'" _ \
+		"$(c5os_cat "$DISK" $ow/last-test.seen)" "$(c5os_has "$DISK" $ow/last-test && echo left)"
+
+	# Swap to OpenWrt from the app, then a test boot that stalls past the deadline
+	make_ui_payload "$RUN/payload-s15b" "menu=2" || { fatal "make-install-stick.sh failed"; return 0; }
+	make_stick "$RUN/payload-s15b" "$stick"
+	ui_stock_boot s15-swap "$stick"
+	check "swap: no report again" log_lacks s15-swap '^QEMU-UI CONFIRM test-failed '
+	check "swap: test boot of slot 1" is_eq "$(boot_outcome s15-swap)" "chainload:$OWRT_ROOT"
+	st=$RUN/s15-deadline.steps
+	printf 'expect 600 c5: test: rebooting into stock\nwait-exit 240\n' > "$st"
+	boot s15-deadline "$DISK" "$(chainload_cmdline s15-swap) C5_TEST_DEADLINE=10" "$st"
+	check "deadline: preinit armed 10 s" log_has s15-deadline 'c5: bootcount: slot 1 test boot; counter and flag untouched; healthy within 10 s or back to stock'
+	check "deadline: failed, flag -> stock" log_has s15-deadline 'c5: test: FAILED: not healthy within 10 s; flag -> slot 2 \(stock\)'
+	check "deadline: c5-booted came too late or not at all" log_lacks s15-deadline 'c5: booted: committed'
+	check "deadline: reboot, flag names stock" is_eq "$(boot_outcome s15-deadline):$(img_flag "$DISK")" reboot:ota:kernel2
+	check "deadline: last-test failed with the reason" bash -c "printf '%s\n' \"\$1\" | grep -qxE 'failed [^ ]+ not healthy within 10 s'" _ "$(c5os_cat "$DISK" $ow/last-test)"
+	check "deadline: pending-commit removed" bash -c "! debugfs -R 'stat $ow/pending-commit' '$(c5os_spec "$DISK")' 2>/dev/null | grep -q '^Inode:'"
+	if awk '/procd: - init -/ { p = 1 } /c5: test: FAILED/ { exit !p }' "$RUN/s15-deadline.log"; then
+		say "  info: the deadline fired after procd's init started (job outlived preinit)"
+	else
+		say "  info: the deadline fired before procd's init started"
+	fi
+}
+
+ALL_SCENARIOS="S1 S2 S3 S4 S5 S6 S7 S8 S9 S10 S12 S13 S14 S15"
