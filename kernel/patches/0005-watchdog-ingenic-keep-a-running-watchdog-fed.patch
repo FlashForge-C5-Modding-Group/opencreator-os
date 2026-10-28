@@ -1,0 +1,27 @@
+From: opencreator-os
+Subject: [PATCH] watchdog: ingenic: keep a watchdog that is already running fed
+
+chainload.ko arms the watchdog right before it jumps into this kernel, so
+a test kernel that hangs resets the SoC. The SDK probe neither stops nor
+reports a running counter, so nothing fed it until procd opens
+/dev/watchdog. Set WDOG_HW_RUNNING when the counter is enabled at probe:
+with CONFIG_WATCHDOG_HANDLE_BOOT_ENABLED the watchdog core then pings it
+(every timeout / 2) until userspace takes over. A normal boot is
+unchanged: the SPL leaves the counter disabled.
+
+--- a/module_drivers/drivers/watchdog/ingenic_wdt.c
++++ b/module_drivers/drivers/watchdog/ingenic_wdt.c
+@@ -286,6 +286,13 @@ static int ingenic_wdt_probe(struct platform_device *pdev)
+ 	clk_prepare_enable(drvdata->wdt_clk);
+ 	clk_prepare_enable(drvdata->tcu_clk);
+ 
++	/* Armed before this kernel started (chainload.ko arms it for a test
++	 * boot; the SPL leaves it off): mark it running so the watchdog core
++	 * feeds it until userspace opens /dev/watchdog
++	 * (CONFIG_WATCHDOG_HANDLE_BOOT_ENABLED). */
++	if (readb(drvdata->base + INGENIC_REG_WDT_COUNTER_ENABLE) & 0x1)
++		set_bit(WDOG_HW_RUNNING, &ingenic_wdt->status);
++
+ 	ret = watchdog_register_device(&drvdata->wdt);
+ 	if (ret < 0) {
+ 		goto err_disable_clk;

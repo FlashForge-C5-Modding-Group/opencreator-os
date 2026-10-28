@@ -6,18 +6,20 @@
  *
  * chainload: boot another kernel image from the running Creator 5 Pro
  * stock 5.10 kernel, from RAM, without writing the eMMC or the boot flag.
- * A test kernel that hangs is undone by a power cycle.
+ * Right before the jump it arms the X2600 watchdog, so a test kernel that
+ * hangs resets the SoC and the SPL boots the flagged (stock) slot.
  *
  *   insmod chainload.ko image=/path/zImage cmdline="..." \
  *          krp=0x<kernel_restart_prepare from /proc/kallsyms> \
- *          [safe_max=0x<physical end of usable lowmem>]
+ *          [safe_max=0x<physical end of usable lowmem>] [wdt=<seconds>]
  *     reads the image into pages in [SAFE_MIN, safe_max), builds argv,
  *     copies the trampoline; prints what it staged. Nothing else happens.
  *   echo 1 > /sys/module/chainload/parameters/go
  *     runs kernel_restart_prepare(NULL) (reboot notifiers, device
- *     shutdown: stops DMA), disables interrupts and enters the trampoline,
- *     which copies the image to 0x80f00000 and jumps there with
- *     a0 = argc, a1 = argv like the stock SPL. Needs one online CPU.
+ *     shutdown: stops DMA), disables interrupts, arms the watchdog (wdt
+ *     seconds, 0 = off) and enters the trampoline, which copies the image
+ *     to 0x80f00000 and jumps there with a0 = argc, a1 = argv like the
+ *     stock SPL. Needs one online CPU.
  *
  * The image is a raw self-extracting zImage linked at 0x80f00000, or the
  * same with a 64-byte legacy uImage header (skipped).
@@ -31,6 +33,8 @@
 #include <linux/kallsyms.h>
 #include <linux/cpumask.h>
 #include <linux/string.h>
+#include <linux/io.h>
+#include <asm/addrspace.h>
 #include <asm/cacheflush.h>
 
 #define LOAD_PHYS	0x00f00000UL
@@ -61,6 +65,34 @@ MODULE_PARM_DESC(krp, "address of kernel_restart_prepare (/proc/kallsyms)");
 static unsigned long safe_max = 0x0c000000UL;
 module_param(safe_max, ulong, 0444);
 MODULE_PARM_DESC(safe_max, "physical address above which no staged page may lie (default 0x0c000000)");
+
+/*
+ * X2600 watchdog: the WDT registers of TCU0 (SDK DT watchdog@13630000) and
+ * the CPM. Armed as the SDK's reboot path does it (5.10 and 6.6
+ * arch/mips/xburst2/soc-x2600/reset.c: reboot signature in CPSPR, then
+ * wdt_start_count), with the TCU0 clock and the WDT clock stop bit cleared
+ * as in 6.6. The input is the RTC clock that CPM_OPCR bit 2 selects (clear:
+ * EXTCLK/512 = 46875 Hz, set: 32768 Hz), prescaled by 1024; the 16-bit
+ * compare register allows at most 1431 s. The SPL disables it on boot; a
+ * kernel that keeps it running (our 6.6 ingenic_wdt) feeds it.
+ */
+#define CPM_BASE	CKSEG1ADDR(0x10000000)
+#define CPM_OPCR	0x24
+#define CPM_CLKGR1	0x28
+#define CPM_CPSPR	0x34
+#define CPM_CPSPPR	0x38
+#define REBOOT_SIGNATURE 0x003535
+#define WDT_BASE	CKSEG1ADDR(0x13630000)
+#define WDT_TDR		0x00
+#define WDT_TCER	0x04
+#define WDT_TCNT	0x08
+#define WDT_TCSR	0x0c
+#define TCU_TSCR	0x3c
+#define WDT_MAX		1431
+
+static unsigned long wdt = 120;
+module_param(wdt, ulong, 0444);
+MODULE_PARM_DESC(wdt, "seconds after the jump until the SoC watchdog resets a hung kernel (0: off, at most 1431; default 120)");
 
 static unsigned long *pages;		/* KSEG0 addresses of image pages */
 static unsigned long npages;
@@ -251,6 +283,25 @@ static int check_krp(void)
 	return 0;
 }
 
+/* Interrupts are off and devices are shut down: plain MMIO through KSEG1. */
+static void arm_watchdog(void)
+{
+	void __iomem *cpm = (void __iomem *)CPM_BASE;
+	void __iomem *w = (void __iomem *)WDT_BASE;
+	unsigned long hz = (readl(cpm + CPM_OPCR) & BIT(2)) ? 32768 : 46875;
+
+	writel(0x5a5a, cpm + CPM_CPSPPR);
+	writel(REBOOT_SIGNATURE, cpm + CPM_CPSPR);
+	writel(0, cpm + CPM_CPSPPR);
+	writel(readl(cpm + CPM_CLKGR1) & ~BIT(8), cpm + CPM_CLKGR1);	/* TCU0 clock on */
+	writel(BIT(16), w + TCU_TSCR);			/* WDT clock not stopped */
+	writel(0, w + WDT_TCER);
+	writel(0, w + WDT_TCNT);
+	writel(wdt * hz / 1024, w + WDT_TDR);
+	writel(5 << 3 | BIT(1) | BIT(10), w + WDT_TCSR);	/* /1024, RTC clock, clear */
+	writel(1, w + WDT_TCER);
+}
+
 static int go_set(const char *val, const struct kernel_param *kp)
 {
 	void (*prepare)(char *) = (void *)krp;
@@ -266,9 +317,11 @@ static int go_set(const char *val, const struct kernel_param *kp)
 	}
 	tramp = (void *)tramp_page;
 	flush_icache_range(tramp_page, tramp_page + PAGE_SIZE);
-	pr_emerg("chainload: shutting devices down and jumping to %s\n", image);
+	pr_emerg("chainload: shutting devices down and jumping to %s (watchdog %lu s)\n", image, wdt);
 	prepare(NULL);
 	local_irq_disable();
+	if (wdt)
+		arm_watchdog();
 	tramp(list_page, npages, argc, argv_page);
 	return 0;	/* not reached */
 }
@@ -290,6 +343,10 @@ static int __init chainload_init(void)
 	    safe_max <= SAFE_MIN + MAX_IMAGE + (1UL << 20)) {
 		pr_err("chainload: safe_max=%lx must be page aligned, above %lx and at most %lx\n",
 		       safe_max, SAFE_MIN + MAX_IMAGE + (1UL << 20), SAFE_MAX_LIMIT);
+		return -EINVAL;
+	}
+	if (wdt > WDT_MAX) {
+		pr_err("chainload: wdt=%lu must be at most %d s\n", wdt, WDT_MAX);
 		return -EINVAL;
 	}
 	ret = check_krp();
@@ -326,7 +383,7 @@ static int __init chainload_init(void)
 		argv_page - PAGE_OFFSET, argc);
 	for (i = 1; i < argc; i++)
 		pr_info("chainload:   argv[%d] %s\n", i, ((char **)argv_page)[i]);
-	pr_info("chainload: staged; echo 1 > /sys/module/chainload/parameters/go\n");
+	pr_info("chainload: staged (watchdog %lu s after the jump); echo 1 > /sys/module/chainload/parameters/go\n", wdt);
 	staged = true;
 	return 0;
 fail:

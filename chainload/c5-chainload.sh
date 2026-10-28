@@ -1,7 +1,8 @@
 #!/bin/sh
 # c5-chainload.sh: boot the opencreator-os kernel from RAM under the running
 # stock Creator 5 Pro kernel (5.10.186+), without writing the eMMC or the
-# boot flag. If the new kernel hangs, a power cycle boots stock as before.
+# boot flag. chainload.ko arms the SoC watchdog for the jump: if the new
+# kernel hangs, the printer resets after C5CL_WDT seconds and boots stock.
 #
 #   c5-chainload.sh stage ROOTDEV [IMAGE]   load chainload.ko, stage IMAGE
 #                                           (default: kernel.uimage next to
@@ -28,6 +29,8 @@
 # Files: chainload.ko and kernel.uimage in the same directory as this script
 # (normally /usr/data/opencreator-os/chainload/). BusyBox ash.
 # C5CL_EXTRA: words appended to the new command line; only c5.* words accepted.
+# C5CL_WDT: seconds from the jump until the watchdog resets a hung kernel
+# (default 120, 0 = off, at most 1431); the new kernel keeps it fed.
 # Test overrides: C5CL_CMDLINE, C5CL_IOMEM, C5CL_KALLSYMS name the files
 # read instead of /proc/cmdline, /proc/iomem, /proc/kallsyms; C5CL_DISK
 # (/dev/mmcblk0), C5CL_FDISK (fdisk), C5CL_DEVROOT (prefix for reading
@@ -43,6 +46,7 @@ DEVROOT=${C5CL_DEVROOT:-}
 LOWMEM_TOP=$((0x10000000))
 SAFE_GAP=$((16 << 20))
 SAFE_FLOOR=$((0x01600000 + (8 << 20) + (1 << 20)))	# chainload.ko lower limit
+WDT=${C5CL_WDT:-120}
 die() { echo "c5-chainload: $*" >&2; exit 1; }
 staged() { grep -q '^chainload ' /proc/modules; }
 
@@ -163,6 +167,8 @@ compute() {
 		case "$w" in c5.?*) ;; *) set +f; die "C5CL_EXTRA accepts only c5.* words, got '$w'" ;; esac
 	done
 	set +f
+	case "$WDT" in '' | *[!0-9]*) die "C5CL_WDT must be a number of seconds, got '$WDT'" ;; esac
+	if [ "${#WDT}" -gt 4 ] || [ "$WDT" -gt 1431 ]; then die "C5CL_WDT must be at most 1431, got '$WDT'"; fi
 	[ "$rootdev" != "$(running_root)" ] || die "$rootdev is the running stock root"
 	check_commit "$rootdev" "$2"
 	cmdline=$(build_cmdline "$rootdev")
@@ -185,6 +191,7 @@ cmd_args() {
 	echo "cmdline=$cmdline"
 	echo "safe_max=$sm"
 	echo "krp=$krp"
+	echo "watchdog=$WDT"
 	echo "commit=$(commit_text)"
 }
 
@@ -204,7 +211,7 @@ cmd_stage() {
 	fi
 	echo "image:    $img ($(wc -c < "$img") bytes)"
 	echo "cmdline:  $cmdline"
-	echo "safe_max: $sm   krp: $krp"
+	echo "safe_max: $sm   krp: $krp   watchdog: ${WDT} s"
 	echo "commit:   $(commit_text)"
 	# busybox insmod >= 1.28 (stock: 1.31.1) quotes a value containing
 	# spaces itself; older ones need the quotes in the argument. Quotes too
@@ -212,7 +219,7 @@ cmd_stage() {
 	# and keep only the one whose staged cmdline reads back unchanged.
 	got=
 	for q in '' '"'; do
-		insmod "$DIR/chainload.ko" image="$img" cmdline="$q$cmdline$q" krp="$krp" safe_max="$sm" || continue
+		insmod "$DIR/chainload.ko" image="$img" cmdline="$q$cmdline$q" krp="$krp" safe_max="$sm" wdt="$WDT" || continue
 		got=$(cat /sys/module/chainload/parameters/cmdline 2>/dev/null)
 		[ "$got" = "$cmdline" ] && break
 		echo "c5-chainload: insmod form ${q:-unquoted} staged cmdline '$got'; unloading" >&2
@@ -228,7 +235,7 @@ cmd_stage() {
 cmd_status() {
 	if staged; then
 		echo "staged"
-		for p in image cmdline krp safe_max; do
+		for p in image cmdline krp safe_max wdt; do
 			echo "  $p: $(cat /sys/module/chainload/parameters/$p 2>/dev/null)"
 		done
 	else
@@ -276,7 +283,7 @@ go_now() {
 
 cmd_go() {
 	staged || die "not staged (run: $0 stage ROOTDEV)"
-	echo "c5-chainload: going; SSH drops. Power-cycle if the printer is not back within 3 minutes."
+	echo "c5-chainload: going; SSH drops. If the printer is not back, the watchdog resets it into stock after ${WDT} s (0: power-cycle)."
 	if command -v setsid >/dev/null 2>&1; then
 		setsid sh "$0" go-now >/dev/null 2>&1 </dev/null &
 	elif command -v nohup >/dev/null 2>&1; then
@@ -293,5 +300,5 @@ go-now) go_now ;;
 unstage) staged || die "not staged"; rmmod chainload ;;
 status) cmd_status ;;
 args) shift; cmd_args "$@" ;;
-*) sed -n '2,35p' "$0"; exit 2 ;;
+*) sed -n '2,37p' "$0"; exit 2 ;;
 esac
