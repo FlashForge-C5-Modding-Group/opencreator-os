@@ -187,6 +187,7 @@ EOF
 	check "healthy boot reset tries" is_eq "$(img_tries "$DISK")" "C5TRIES1 0"
 	check "USB hook deferred at START=19 on the test boot" res_has s2-openwrt hook 'c5-usb-hook.*deferred until c5-booted'
 	check "c5-booted recorded last-test ok; the deferred hook's installer reported it" res_has s2-openwrt hook '^ok [^ ]+$'
+	check "the detached hook's installer output goes to syslog" res_has s2-openwrt hook 'c5-usb-hook: test: OpenWrt .* installed'
 	check "installed report in the stick log (headless)" bash -c "mtype -i '$RUN/stick-s2-stock.img@@1M' ::opencreator-os-install.log | grep -q 'test: OpenWrt .* installed: the test boot succeeded and slot 1 is the boot system (no display)'"
 	check "last-test consumed" bash -c "! debugfs -R 'stat /opencreator-os/last-test' '$(c5os_spec "$DISK")' 2>/dev/null | grep -q '^Inode:'"
 	check "healthy kernel checksum saved on c5os" is_eq "$(c5os_cat "$DISK" /opencreator-os/good-kernel)" "$OW_K_SUM"
@@ -442,7 +443,8 @@ damage_stock_slot() {
 	dd if=/dev/urandom of="$DISK" bs=512 seek=$((PSTART[3] + 256)) count=256 conv=notrunc status=none
 }
 
-# S6: real OpenWrt USB hook + install stick, headless ACTION repair and swap.
+# S6: real OpenWrt USB hook + install stick, headless ACTION repair and swap;
+# Repair stock from the app asks first, and boot does not wait for the app.
 scenario_S6() {
 	new_disk
 	prepare_committed || return 0
@@ -497,6 +499,34 @@ EOF
 	check "installer refuses swap when stock is not selectable" res_has s6-refuse hooklog 'Cannot select stock'
 	check "refused swap never selects stock" is_eq "$(img_flag "$DISK")" ota:kernel
 	check "refused swap does not clear invalid mark" stockinv_set
+
+	# app: the main menu waits for a tap, boot goes on (network, dropbear);
+	# Repair stock asks first: Cancel writes nothing, ok repairs and reboots
+	new_disk
+	prepare_committed || return 0
+	damage_stock_slot
+	c5os_rm "$DISK" /opencreator-os/last-test  # no "OpenWrt installed" screen first
+	local dmg
+	dmg=$(img_part_sum "$DISK" 3 $((PSIZE[3] * 512)))$(img_part_sum "$DISK" 4 "$STOCK_SQ_LEN")
+	make_ui_payload "$RUN/payload-s6-ui" "menu_main=3 confirm_repair-stock=cancel hold=main" || { fatal "make-install-stick.sh failed"; return 0; }
+	make_stick "$RUN/payload-s6-ui" "$RUN/stick-s6-ui.img"
+	steps_openwrt "$RUN/s6-ui-cancel.steps" <<'EOF'
+run 120 held i=0; until [ -f /tmp/qemu-ui-held ]; do i=$((i+1)); [ $i -lt 60 ] || exit 1; sleep 2; done; [ ! -f /tmp/qemu-ui-release ] && pidof dropbear && ifstatus lan | grep '"up": true'
+run 30 release touch /tmp/qemu-ui-release
+run 120 hookdone i=0; while grep -q ' /mnt ' /proc/mounts; do i=$((i+1)); [ $i -lt 60 ] || exit 1; sleep 2; done
+EOF
+	boot s6-ui-cancel "$DISK" "$(spl_root "$DISK")" "$RUN/s6-ui-cancel.steps" "$RUN/stick-s6-ui.img"
+	check "app: c5-booted, dropbear and lan up while the menu waits for a tap" res_ok s6-ui-cancel held
+	check "app: Repair stock asks first" log_has s6-ui-cancel '^QEMU-UI CONFIRM repair-stock 5 Repair stock\\nRewrite the stock slot from the copy saved at install, then boot stock\.\|Repair stock\|Cancel$'
+	check "app: Cancel aborts" log_has s6-ui-cancel '^QEMU-UI abort: cancelled at repair-stock'
+	check "app: the hook returns after Cancel" res_ok s6-ui-cancel hookdone
+	check "app: Cancel writes nothing" is_eq "$(img_flag "$DISK"):$(img_part_sum "$DISK" 3 $((PSIZE[3] * 512)))$(img_part_sum "$DISK" 4 "$STOCK_SQ_LEN")" "ota:kernel:$dmg"
+	make_ui_payload "$RUN/payload-s6-ui" "menu_main=3 confirm_repair-stock=ok" || { fatal "make-install-stick.sh failed"; return 0; }
+	make_stick "$RUN/payload-s6-ui" "$RUN/stick-s6-ui.img"
+	printf 'expect 600 ^QEMU-UI CONFIRM repair-stock \nexpect 900 reboot: Restarting system\nwait-exit 240\n' > "$RUN/s6-ui-repair.steps"
+	boot s6-ui-repair "$DISK" "$(spl_root "$DISK")" "$RUN/s6-ui-repair.steps" "$RUN/stick-s6-ui.img"
+	check "app: Repair stock repairs and reboots to stock" is_eq "$(boot_outcome s6-ui-repair):$(img_flag "$DISK"):$(img_part_sum "$DISK" 3 $((PSIZE[3] * 512)))$(img_part_sum "$DISK" 4 "$STOCK_SQ_LEN")" "reboot:ota:kernel2:$BASE_P3$STOCK_SQ_SUM"
+	check "app: Rebooting into stock stays up (no Continue)" bash -c "grep -q '^QEMU-UI INFO swap Rebooting into stock' \"\$1\" && ! grep -q '^QEMU-UI-EOF' \"\$1\"" _ "$RUN/s6-ui-repair.log"
 }
 
 stockinv_set() { [ "$(img_bytes "$DISK" $(($(poff 5) + 131072)) 15)" = C5STOCKINVALID1 ]; }
@@ -806,6 +836,7 @@ scenario_S14() {
 	check "OpenWrt shows OpenWrt installed with one Reboot button" log_has s14-a-openwrt '^QEMU-UI MENU installed OpenWrt installed\\nThe test boot succeeded and OpenWrt is now the boot system\. Remove the USB stick, then tap Reboot\.\|Reboot$'
 	check "the screen comes after the commit" bash -c "awk '/c5: booted: committed/ && !c { c = NR } /c5: booted: last-test ok/ && !o { o = NR } /^QEMU-UI MENU installed / && !m { m = NR } END { exit !(c && o && m && c < o && o < m) }' \"\$1\"" _ "$RUN/s14-a-openwrt.log"
 	check "Reboot reboots" is_eq "$(boot_outcome s14-a-openwrt)" reboot
+	check "Rebooting into OpenWrt stays up (no Continue)" bash -c "grep -q '^QEMU-UI INFO reboot Rebooting into OpenWrt' \"\$1\" && ! grep -q '^QEMU-UI-EOF' \"\$1\"" _ "$RUN/s14-a-openwrt.log"
 	check "installed screen marked seen before the reboot" is_eq "$(c5os_cat "$DISK" /opencreator-os/last-test.seen | cut -d' ' -f1):$(c5os_has "$DISK" /opencreator-os/last-test && echo left)" "ok:"
 	make_ui_payload "$RUN/payload-s14-n" "menu=0" || { fatal "make-install-stick.sh failed"; return 0; }
 	make_stick "$RUN/payload-s14-n" "$RUN/stick-s14-n.img"

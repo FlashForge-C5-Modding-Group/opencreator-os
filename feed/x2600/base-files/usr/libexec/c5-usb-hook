@@ -4,6 +4,9 @@
 # installer test boot is open (chainloaded test boot, or last-test still
 # "started" after a flip) the hook waits for it: c5-booted runs it again
 # with "now" once it decided, so the installer sees the committed result.
+# The stick runs detached (own session, output to syslog, one run at a time):
+# the installer's screens wait for a tap, and boot (network, dropbear) and
+# c5-booted must not wait with them.
 
 . /lib/c5/slot.sh
 
@@ -17,12 +20,21 @@ case "$machine $pid" in
 	*) logger -t c5-usb-hook "invalid stored model; skipping USB hook"; exit 0 ;;
 esac
 
-if [ "${1:-}" != now ] && { c5_test_boot || grep -q '^started ' "$C5_OCDIR/last-test" 2>/dev/null; }; then
-	logger -t c5-usb-hook "test boot outcome pending; USB hook deferred until c5-booted"
-	: > /tmp/c5-usb-hook.deferred
+if [ "${1:-}" != detached ]; then
+	if [ "${1:-}" != now ] && { c5_test_boot || grep -q '^started ' "$C5_OCDIR/last-test" 2>/dev/null; }; then
+		logger -t c5-usb-hook "test boot outcome pending; USB hook deferred until c5-booted"
+		: > /tmp/c5-usb-hook.deferred
+		exit 0
+	fi
+	setsid "$0" detached < /dev/null 2>&1 | logger -t c5-usb-hook > /dev/null 2>&1 &
 	exit 0
 fi
 
+exec 9> /tmp/c5-usb-hook.lock
+if ! flock -n 9; then
+	logger -t c5-usb-hook "another USB hook run is active; skipping"
+	exit 0
+fi
 mkdir -p /mnt
 for dev in /dev/sd[a-z][0-9]* /dev/sd[a-z]; do
 	[ -b "$dev" ] || continue

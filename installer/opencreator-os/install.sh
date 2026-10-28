@@ -434,8 +434,7 @@ report_installed() {
 	log "reboot: into OpenWrt (slot $ri_own)"
 	ui_info reboot "Rebooting into OpenWrt"
 	sync
-	$C5_REBOOT
-	exit 0
+	reboot_now
 }
 
 # copy_chainload: chainload.ko and c5-chainload.sh from the stick and slot
@@ -719,8 +718,7 @@ c5os_reboot() {
 	ui_info c5os-reboot "Partition table written\nRebooting once so the kernel sees it; the installer continues after the reboot. Leave the stick in."
 	sync
 	sleep 5
-	$C5_REBOOT
-	exit 0
+	reboot_now
 }
 
 # finish_c5os: grow userdata to p7, format c5os, userdata mounted again.
@@ -880,8 +878,7 @@ flip() {
 	ui_info reboot "Rebooting into OpenWrt (slot $TGT)"
 	sync
 	[ "$HOOK" = 1 ] && [ "$UI" = 0 ] && sleep "${C5_SCREEN_PAUSE:-10}"
-	$C5_REBOOT
-	exit 0
+	reboot_now
 }
 
 # to_openwrt: end in OpenWrt in slot TGT. Its kernel is known-good: flip.
@@ -977,10 +974,13 @@ openwrt_main() {
 		if [ "$CHECK" != 1 ]; then
 			ui_info update "Updating OpenWrt\nDo not power off."
 			sysupgrade "$STICK/sysupgrade.tar" || finish failed "Update FAILED" 1
+			sleep "$C5_REBOOT_WAIT"  # sysupgrade reboots: keep the screen (reboot_now)
 		fi
 		;;
 	swap | repair-stock)
 		if [ "$ACTION" = repair-stock ]; then
+			ui_confirm repair-stock 5 "Repair stock\nRewrite the stock slot from the copy saved at install, then boot stock." \
+				"Repair stock" "Cancel" ok || abort "cancelled at repair-stock"
 			ui_info repair-stock "Checking the saved stock slot..."
 			# shellcheck source-path=SCRIPTDIR source=restore.sh
 			. "$SELF_DIR/restore.sh"
@@ -996,8 +996,7 @@ openwrt_main() {
 			log "swap: boot flag -> slot $TGT ('$(c5_flag_read)'); rebooting into stock"
 			ui_info swap "Rebooting into stock (slot $TGT)"
 			sync
-			$C5_REBOOT
-			exit 0
+			reboot_now
 		fi
 		;;
 	*) abort "action $ACTION is not available on OpenWrt" ;;

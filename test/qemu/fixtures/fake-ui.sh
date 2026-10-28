@@ -7,11 +7,16 @@
 #   menu_<id>=N                    answer to MENU <id>, before menu=
 #   confirm_<id>=ok|early|cancel   ok: wait out the button delay, then ok;
 #                                  early: ok at once; cancel (default ok)
+#   hold=<id>                      before answering MENU/CONFIRM <id>, create
+#                                  /tmp/qemu-ui-held and wait for
+#                                  /tmp/qemu-ui-release (nobody tapped yet)
 # BLOCK with a button ("TEXT|BUTTON") taps it: exit 1, as the app does;
 # BLOCK without one ends this script with 0 (the app would stay up until
-# power-off). Either closes the installer's stdin.
+# power-off). Either closes the installer's stdin. When the installer exits
+# (EOF) this prints QEMU-UI-EOF: the app would show its Continue button.
 conf=$(dirname "$0")/ui.conf
 get() { sed -n "s/^$1=//p" "$conf" 2>/dev/null | tail -n 1; }
+hold=$(get hold)
 
 while IFS= read -r line; do
 	printf 'QEMU-UI %s\n' "$line" > /dev/console
@@ -19,6 +24,14 @@ while IFS= read -r line; do
 	# shellcheck disable=SC2086
 	set -- $line
 	set +f
+	case "${1:-}" in
+	MENU | CONFIRM)
+		if [ -n "$hold" ] && [ "$2" = "$hold" ]; then
+			: > /tmp/qemu-ui-held
+			until [ -f /tmp/qemu-ui-release ]; do sleep 1; done
+		fi
+		;;
+	esac
 	case "${1:-}" in
 	MENU)
 		m=$(get "menu_$2")
@@ -39,3 +52,4 @@ while IFS= read -r line; do
 		;;
 	esac
 done
+printf 'QEMU-UI-EOF\n' > /dev/console
