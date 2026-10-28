@@ -5,7 +5,8 @@
 # good-kernel gets the boot flag at once, any other is test-booted from RAM
 # and a healthy boot commits it. Install also creates the c5os partition
 # (userdata shrunk) once, optionally after a verified whole-eMMC backup to
-# the stick.
+# the stick. How that boot went (c5os last-test) is reported once: a
+# failure by the next stock run, success by OpenWrt's run of the stick.
 #
 #   sh install.sh [--from-stick DIR] [--check] [--yes] [--hook] [--ui]
 #                 [--action install|swap|repair-stock|update] [--backup]
@@ -31,7 +32,7 @@
 # opencreator-os/authorized_keys.
 set -u
 
-usage() { sed -n '2,31s/^# \{0,1\}//p' "$0"; }
+usage() { sed -n '2,32s/^# \{0,1\}//p' "$0"; }
 
 SELF_DIR=$(cd "$(dirname "$0")" && pwd) || exit 1
 STICK='' CHECK=0 YES=0 HOOK=0 UI=0 ACTION='' BACKUP=0 MACHINE='' PID='' MODEL_ARGS=0
@@ -350,30 +351,92 @@ save_settings() (
 	sync
 )
 
+# c5os_do OPTS CMD...: run CMD with c5os mounted at $C5M with OPTS (the
+# *_in functions run only through it: SC2317)
+C5M=/tmp/c5os-config
+c5os_do() (
+	mkdir -p "$C5M" || exit 1
+	mount -t ext4 -o "$1" "$C5OS_DEV" "$C5M" || { rmdir "$C5M"; exit 1; }
+	trap 'umount "$C5M"; rmdir "$C5M"' EXIT
+	shift
+	"$@"
+)
+
 # kernel_good FILE: FILE's uImage is c5os's good-kernel (recorded by the
 # last healthy OpenWrt boot)
-kernel_good() (
-	command -v sha256sum > /dev/null 2>&1 || exit 1
-	mnt=/tmp/c5os-config
-	mkdir -p "$mnt" || exit 1
-	mount -t ext4 -o ro,noload "$C5OS_DEV" "$mnt" || { rmdir "$mnt"; exit 1; }
-	trap 'umount "$mnt"; rmdir "$mnt"' EXIT
-	good=$(cat "$mnt/opencreator-os/good-kernel" 2>/dev/null)
+# shellcheck disable=SC2317
+kernel_good_in() {
+	good=$(cat "$C5M/opencreator-os/good-kernel" 2>/dev/null)
 	[ -n "$good" ] && [ "$(c5_kernel_sum "$1")" = "$good" ]
-)
+}
+kernel_good() { command -v sha256sum > /dev/null 2>&1 && c5os_do ro,noload kernel_good_in "$1"; }
 
 # pending_commit: c5os's pending-commit names slot TGT, so a healthy test
 # boot of it points the boot flag there (c5-booted). A marker that already
 # names TGT (e.g. a sysupgrade's) is kept.
-pending_commit() (
-	mnt=/tmp/c5os-config
-	mkdir -p "$mnt" || exit 1
-	mount -t ext4 -o rw,noatime "$C5OS_DEV" "$mnt" || { rmdir "$mnt"; exit 1; }
-	trap 'umount "$mnt"; rmdir "$mnt"' EXIT
-	f=$mnt/opencreator-os/pending-commit
-	grep -qx "slot=$TGT" "$f" 2>/dev/null && exit 0
-	mkdir -p "$mnt/opencreator-os" && printf 'slot=%s\n' "$TGT" > "$f" && sync
-)
+# shellcheck disable=SC2317
+pending_commit_in() {
+	f=$C5M/opencreator-os/pending-commit
+	grep -qx "slot=$TGT" "$f" 2>/dev/null && return 0
+	mkdir -p "$C5M/opencreator-os" && printf 'slot=%s\n' "$TGT" > "$f" && sync
+}
+pending_commit() { c5os_do rw,noatime pending_commit_in; }
+
+# c5os's last-test: the stock side writes "started TVER" right before it
+# boots OpenWrt (flip or jump); OpenWrt replaces it with "ok VERSION" or
+# "failed VERSION REASON" (slot.sh c5_test_record, c5-booted). Whoever
+# tells the user renames it to last-test.seen.
+# shellcheck disable=SC2317
+last_test_in() { cat "$C5M/opencreator-os/last-test" 2>/dev/null; }
+# shellcheck disable=SC2317
+started_in() { mkdir -p "$C5M/opencreator-os" && printf 'started %s\n' "$TVER" > "$C5M/opencreator-os/last-test" && sync; }
+# shellcheck disable=SC2317
+seen_in() { mv -f "$C5M/opencreator-os/last-test" "$C5M/opencreator-os/last-test.seen" && sync; }
+mark_started() { c5os_do rw,noatime started_in; }
+
+# report_test: once, on stock, how the last test boot failed. "started" is
+# left when the test kernel hung (the watchdog reset the printer) or the
+# printer was power-cycled before OpenWrt could record anything.
+report_test() {
+	[ "$HAVE_C5OS" = 1 ] || return 0
+	lt=$(c5os_do ro,noload last_test_in) || return 0
+	lt_ver=$(printf '%s\n' "$lt" | cut -d' ' -f2)
+	case "$lt" in
+	"started "*) lt_why="hung before OpenWrt started (watchdog reset)" ;;
+	"failed "*) lt_why=$(printf '%s\n' "$lt" | cut -d' ' -f3-) ;;
+	*) return 0 ;;
+	esac
+	log "test: the OpenWrt test boot ($lt_ver) failed: $lt_why; stock is unchanged"
+	[ "$CHECK" = 1 ] && return 0
+	lt_go=0
+	if [ "$UI" = 1 ]; then
+		ui_confirm test-failed 0 "OpenWrt test failed\n$lt_why\nStock is unchanged and boots normally." \
+			"Try again" "Boot to stock" cancel || lt_go=1
+	fi
+	c5os_do rw,noatime seen_in || log "test: cannot rename c5os last-test to last-test.seen"
+	[ "$lt_go" = 0 ] || finish stock "Booting stock\nStock is unchanged." 1
+}
+
+# report_installed: once, on OpenWrt, that the installer's test boot (or
+# flip) of this slot was healthy and committed (c5-booted wrote "ok"). The
+# app offers Reboot, which boots OpenWrt again (the flag names it).
+report_installed() {
+	lt=$(cat "$OCDIR/last-test" 2>/dev/null)
+	case "$lt" in "ok "*) ;; *) return 0 ;; esac
+	ri_own=$(c5_own_slot) && [ "$(c5_flag_slot)" = "$ri_own" ] || return 0
+	log "test: OpenWrt ${lt#ok } installed: the test boot succeeded and slot $ri_own is the boot system$([ "$UI" = 1 ] || echo ' (no display)')"
+	[ "$CHECK" = 1 ] && return 0
+	[ "$UI" = 1 ] && ui_menu installed "OpenWrt installed\nThe test boot succeeded and OpenWrt is now the boot system. Remove the USB stick, then tap Reboot." "Reboot"
+	mv -f "$OCDIR/last-test" "$OCDIR/last-test.seen" || log "test: cannot rename $OCDIR/last-test to last-test.seen"
+	sync
+	[ "$UI" = 1 ] || return 0
+	[ "$UI_CHOICE" = 1 ] || exit 0
+	log "reboot: into OpenWrt (slot $ri_own)"
+	ui_info reboot "Rebooting into OpenWrt"
+	sync
+	$C5_REBOOT
+	exit 0
+}
 
 # copy_chainload: chainload.ko and c5-chainload.sh from the stick and slot
 # TGT's kernel (its uImage only: c5-chainload.sh lets a test boot commit
@@ -466,9 +529,12 @@ release_stick() {
 
 # chainload_test: stage the target slot's kernel with root= on the target
 # rootfs and jump into it from RAM. The eMMC and the boot flag are untouched.
+# chainload.ko arms the SoC watchdog for the jump: a kernel that hangs
+# resets the printer into stock; OpenWrt fails an unhealthy test boot back
+# to stock itself (slot.sh c5_test_fail). The next stock run reports either.
 chainload_test() {
 	cl=$OCDIR/chainload/c5-chainload.sh
-	ui_info chainload "Test-booting OpenWrt from RAM\nThe screen may go blank. If OpenWrt is not up within 3 minutes, power-cycle: stock boots."
+	ui_info chainload "Test-booting OpenWrt from RAM\nThe screen may go blank. If OpenWrt does not come up, the printer returns to stock by itself within about 4 minutes."
 	log "chainload: staging $OCDIR/chainload/kernel.uimage with root=$TR"
 	if ! cl_out=$(sh "$cl" stage "$TR" 2>&1); then
 		log_lines "chainload: " "$cl_out"
@@ -478,9 +544,10 @@ chainload_test() {
 		finish failed "Chainload test FAILED\nSlot $TGT stays written; the boot flag stays on stock." 1
 	fi
 	log_lines "chainload: " "$cl_out"
+	mark_started || fail "cannot write last-test on c5os"
 	echo "chainload slot=$TGT key=$CL_KEY version=$VERSION" >> "$OCDIR/install.state"
 	log "chainload: staged; jumping into OpenWrt from RAM (boot flag stays on stock, slot $OWN)"
-	log "chainload: no OpenWrt within 3 minutes -> power-cycle; stock boots (a headless hook run does not repeat this test)"
+	log "chainload: a hung test kernel is reset by the watchdog, an unhealthy OpenWrt reboots itself; both boot stock (a headless hook run does not repeat this test)"
 	sync
 	release_stick
 	sync
@@ -807,6 +874,7 @@ flip() {
 		c5_flag_write "$OWN"
 		fail "boot flag write failed; flag set back to slot $OWN ('$(c5_flag_read)')"
 	fi
+	mark_started || log "flip: cannot write last-test on c5os (the boot is not reported)"
 	echo "flipped slot=$TGT key=$CL_KEY version=$VERSION" >> "$OCDIR/install.state"
 	log "flip: boot flag -> slot $TGT ('$(c5_flag_read)'); rebooting into OpenWrt"
 	ui_info reboot "Rebooting into OpenWrt (slot $TGT)"
@@ -818,7 +886,10 @@ flip() {
 
 # to_openwrt: end in OpenWrt in slot TGT. Its kernel is known-good: flip.
 # Otherwise test-boot it from RAM; the healthy boot commits pending-commit.
+# Either way last-test then says "started TVER" (the version written there).
 to_openwrt() {
+	TVER=$(sed -n "s/^written slot=$TGT .* version=\([^ ]*\)$/\1/p" "$OCDIR/install.state" 2>/dev/null | head -n 1)
+	TVER=${TVER:-unknown}
 	if kernel_good "$TK"; then
 		log "switch: slot $TGT kernel matches c5os good-kernel; no test boot"
 		flip
@@ -874,6 +945,7 @@ do_install() {
 }
 
 openwrt_main() {
+	report_installed
 	if [ "$UI" != 1 ] && [ -z "$ACTION" ]; then
 		log "install: no ACTION on OpenWrt; nothing to do"
 		return 0
@@ -944,6 +1016,7 @@ case "$ACTION" in install | swap) ;; *) abort "action $ACTION is not available o
 log "install: opencreator-os $VERSION from $STICK (check=$CHECK hook=$HOOK ui=$UI action=$ACTION)"
 ui_info check "Checking the printer..."
 preflight
+report_test
 
 TRIED=0
 if [ "$HOOK" = 1 ] && [ "$UI" = 0 ] &&
