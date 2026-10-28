@@ -67,9 +67,13 @@ difference from this as DEVIATION.
 ## Peripherals (Observed)
 
 - GPIO chips GPA..GPE at bases 0, 32, 64, 96, 128 → PC11 heartbeat is gpio 75.
-- USB: internal hub `05e3:0610` on the OTG controller carries the
-  RTL8821CU Wi-Fi (`0bda:c811`), the camera and the front socket. Wi-Fi power
-  is PB07 (stock `8821cu.ko power_on=PB07`; active level **Hypothesis**: high).
+- USB: internal hub `05e3:0610` on the host controller `13540000.usb`
+  (stock dmesg: bus 1, `1-1`; OpenWrt: bus 2, `2-1`) carries the RTL8821CU
+  Wi-Fi (`0bda:c811`), the camera (`05a3:9230` "Integrated Camera", UVC) and
+  the front socket. Nothing enumerates on the OTG controller `13500000.otg`;
+  stock's `S90adb` creates a configfs adb gadget but binds no UDC, ships no
+  `adbd`, and `app_startup.sh` kills adb. Wi-Fi power is PB07 (stock
+  `8821cu.ko power_on=PB07`; active level **Hypothesis**: high).
 - Framebuffer: 480x800, virtual 480x1600, 32 bpp, byte order B,G,R,A.
 - Stock busybox: has `sha256sum`, `md5sum`, `strings`, `hexdump`, `fbset`,
   `devmem`; `od` rejects `-A` and `-j`; no `partx`, `unsquashfs`, `timeout`.

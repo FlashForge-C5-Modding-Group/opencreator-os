@@ -178,8 +178,9 @@
 	status = "disabled";
 };
 
-/* ---- USB: as stock. The OTG port carries the internal hub (Wi-Fi, camera,
- * front USB socket); the second controller is host-only. ---- */
+/* ---- USB. The internal hub (Wi-Fi, camera, front USB socket) is on the
+ * host-only controller 13540000.usb (stock and OpenWrt dmesg); nothing
+ * enumerates on the OTG controller, and stock never binds a gadget to it. ---- */
 
 &otg_phy {
 	status = "okay";
@@ -192,9 +193,11 @@
 	disable-sw-switch-id;
 };
 
+/* DEVIATION: stock has dr_mode = "otg". The kernel is host-only
+ * (CONFIG_USB_DWC2_HOST, no gadget stack); dwc2 would force host anyway. */
 &otg {
 	status = "okay";
-	dr_mode = "otg";
+	dr_mode = "host";
 };
 
 &usb {

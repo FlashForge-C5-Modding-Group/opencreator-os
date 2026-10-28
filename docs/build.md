@@ -130,6 +130,14 @@ describe`), and runs `make`. Options: `--menuconfig`, `--kernel-menuconfig`,
   Goodix drivers configured, use the installer headless on OpenWrt until
   display bring-up is verified on hardware; the stock touchscreen flow is
   separate. The kernel's boot log on the panel (above) needs no app.
+- Left out on purpose (`kernel/creator5pro.config`): MTD, NAND, UBI, UBIFS,
+  JFFS2 and the SDK SPI-flash controller (storage is eMMC only; the boot flag
+  and slots are written with `dd`), sound and the SDK ASoC drivers (stock's
+  internal codec has no user here), netfilter (no firewall package), the USB
+  gadget stack and configfs (dwc2 is host-only: the internal hub is on the
+  host controller `13540000.usb`, and stock never binds a gadget to the OTG
+  controller), the SDK's `DEBUG_SPINLOCK` and `SPINLOCK_TEST`.
+  `CONFIG_LOG_BUF_SHIFT=16` (64 KiB; a printer boot logs about 20 KiB).
 
 ### Regenerating `feed/x2600/config-6.6`
 
@@ -147,6 +155,13 @@ fails if any fragment line did not survive. After a full OpenWrt build,
 builds the tree in place, so after a build `O=` refuses it ("source tree is
 not clean"); run `mkconfig.sh` on a copy cleaned with
 `make ARCH=mips mrproper` instead.
+
+`config-6.6` is not the whole story: OpenWrt adds its own kernel options when
+it configures the tree. Every selected kmod package turns its `KCONFIG`
+symbols on as modules (that is how USB serial, USB Ethernet and UVC get in),
+and `CONFIG_KERNEL_*` options in `config/openwrt.seed` become kernel options
+(the seed turns off `KERNEL_MPTCP` and `KERNEL_RT_GROUP_SCHED`, which OpenWrt
+enables by default). Check a change against the built `kernel.config`.
 
 ## Packages
 
