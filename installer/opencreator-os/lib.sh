@@ -14,7 +14,6 @@
 #   C5_SFDISK      util-linux sfdisk for GPT dump/write       (sfdisk; install.sh: the stick's bin/sfdisk)
 #   C5_DATA        stock userdata mount point                 (/usr/data)
 #   C5_REBOOT      reboot command                             (reboot)
-#   C5_REBOOT_WAIT seconds to wait for the reboot to kill us  (120)
 #   C5_UNAME_R     kernel release                             ($(uname -r))
 #   C5_SUM         force md5sum or sha256sum                  (sha256sum if present)
 #   C5_C5OS_MIB    size of the c5os partition in MiB          (4096)
@@ -28,7 +27,6 @@ C5_FDISK=${C5_FDISK:-fdisk}
 C5_SFDISK=${C5_SFDISK:-sfdisk}
 C5_DATA=${C5_DATA:-/usr/data}
 C5_REBOOT=${C5_REBOOT:-reboot}
-C5_REBOOT_WAIT=${C5_REBOOT_WAIT:-120}
 C5_UNAME_R=${C5_UNAME_R:-$(uname -r)}
 C5_C5OS_MIB=${C5_C5OS_MIB:-4096}
 # shellcheck source-path=SCRIPTDIR source=../../feed/x2600/base-files/lib/c5/slot.sh
@@ -84,14 +82,6 @@ log() {
 die() {
 	log "abort: $*"
 	return 1
-}
-
-# reboot_now: run $C5_REBOOT and stay alive until the reboot kills this
-# script (C5_REBOOT_WAIT seconds at most), then exit 0. The os-installer app
-# offers Continue once the backend exits; a "Rebooting" screen must keep it.
-reboot_now() {
-	$C5_REBOOT && sleep "$C5_REBOOT_WAIT"
-	exit 0
 }
 
 # --- os-installer screen protocol ---------------------------------------------

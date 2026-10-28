@@ -210,9 +210,10 @@ The backend offers these actions (menu labels apply when a display works):
 | Swap to stock | `swap` | Refuses unselectable stock; clears `pending-commit`, resets the counter, selects stock and reboots. |
 | Repair stock | `repair-stock` | Checks and restores the saved stock slot from `userdata` (`/usr/data/opencreator-os/stock/` on stock), reads it back, then selects stock and reboots only if selectable. The app asks first ("Repair stock" enabled after 5 s, or "Cancel"); headless runs do not ask. |
 
-On stock and OpenWrt, a "Rebooting ..." screen stays up until the reboot: the installer
-waits for it (at most 120 s, `C5_REBOOT_WAIT`), so the app shows no
-Continue button there.
+On stock and OpenWrt the installer exits with status 0 once it has asked for
+a reboot, and the app then exits at once without a Continue button, leaving
+the "Rebooting ..." screen up (stock acts on the reboot only after its USB
+hook returns). Failures and cancels (non-zero status) show Continue.
 
 There is no uninstall action on OpenWrt: it cannot wipe its own slot.
 Repair does not restore `usershare`, and it does not take stock images from

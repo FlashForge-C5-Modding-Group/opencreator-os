@@ -520,13 +520,14 @@ EOF
 	check "app: Repair stock asks first" log_has s6-ui-cancel '^QEMU-UI CONFIRM repair-stock 5 Repair stock\\nRewrite the stock slot from the copy saved at install, then boot stock\.\|Repair stock\|Cancel$'
 	check "app: Cancel aborts" log_has s6-ui-cancel '^QEMU-UI abort: cancelled at repair-stock'
 	check "app: the hook returns after Cancel" res_ok s6-ui-cancel hookdone
+	check "app: Cancel ends with Continue (status 1)" log_has s6-ui-cancel '^QEMU-UI-CONTINUE 1$'
 	check "app: Cancel writes nothing" is_eq "$(img_flag "$DISK"):$(img_part_sum "$DISK" 3 $((PSIZE[3] * 512)))$(img_part_sum "$DISK" 4 "$STOCK_SQ_LEN")" "ota:kernel:$dmg"
 	make_ui_payload "$RUN/payload-s6-ui" "menu_main=3 confirm_repair-stock=ok" || { fatal "make-install-stick.sh failed"; return 0; }
 	make_stick "$RUN/payload-s6-ui" "$RUN/stick-s6-ui.img"
 	printf 'expect 600 ^QEMU-UI CONFIRM repair-stock \nexpect 900 reboot: Restarting system\nwait-exit 240\n' > "$RUN/s6-ui-repair.steps"
 	boot s6-ui-repair "$DISK" "$(spl_root "$DISK")" "$RUN/s6-ui-repair.steps" "$RUN/stick-s6-ui.img"
 	check "app: Repair stock repairs and reboots to stock" is_eq "$(boot_outcome s6-ui-repair):$(img_flag "$DISK"):$(img_part_sum "$DISK" 3 $((PSIZE[3] * 512)))$(img_part_sum "$DISK" 4 "$STOCK_SQ_LEN")" "reboot:ota:kernel2:$BASE_P3$STOCK_SQ_SUM"
-	check "app: Rebooting into stock stays up (no Continue)" bash -c "grep -q '^QEMU-UI INFO swap Rebooting into stock' \"\$1\" && ! grep -q '^QEMU-UI-EOF' \"\$1\"" _ "$RUN/s6-ui-repair.log"
+	check "app: Rebooting into stock, then the app ends without Continue" bash -c "grep -q '^QEMU-UI INFO swap Rebooting into stock' \"\$1\" && ! grep -q '^QEMU-UI-CONTINUE' \"\$1\"" _ "$RUN/s6-ui-repair.log"
 }
 
 stockinv_set() { [ "$(img_bytes "$DISK" $(($(poff 5) + 131072)) 15)" = C5STOCKINVALID1 ]; }
@@ -836,7 +837,7 @@ scenario_S14() {
 	check "OpenWrt shows OpenWrt installed with one Reboot button" log_has s14-a-openwrt '^QEMU-UI MENU installed OpenWrt installed\\nThe test boot succeeded and OpenWrt is now the boot system\. Remove the USB stick, then tap Reboot\.\|Reboot$'
 	check "the screen comes after the commit" bash -c "awk '/c5: booted: committed/ && !c { c = NR } /c5: booted: last-test ok/ && !o { o = NR } /^QEMU-UI MENU installed / && !m { m = NR } END { exit !(c && o && m && c < o && o < m) }' \"\$1\"" _ "$RUN/s14-a-openwrt.log"
 	check "Reboot reboots" is_eq "$(boot_outcome s14-a-openwrt)" reboot
-	check "Rebooting into OpenWrt stays up (no Continue)" bash -c "grep -q '^QEMU-UI INFO reboot Rebooting into OpenWrt' \"\$1\" && ! grep -q '^QEMU-UI-EOF' \"\$1\"" _ "$RUN/s14-a-openwrt.log"
+	check "Rebooting into OpenWrt, then the app ends without Continue" bash -c "grep -q '^QEMU-UI INFO reboot Rebooting into OpenWrt' \"\$1\" && ! grep -q '^QEMU-UI-CONTINUE' \"\$1\"" _ "$RUN/s14-a-openwrt.log"
 	check "installed screen marked seen before the reboot" is_eq "$(c5os_cat "$DISK" /opencreator-os/last-test.seen | cut -d' ' -f1):$(c5os_has "$DISK" /opencreator-os/last-test && echo left)" "ok:"
 	make_ui_payload "$RUN/payload-s14-n" "menu=0" || { fatal "make-install-stick.sh failed"; return 0; }
 	make_stick "$RUN/payload-s14-n" "$RUN/stick-s14-n.img"
@@ -878,6 +879,7 @@ scenario_S14() {
 	check "same-build reinstall never chainloads" log_lacks s14-reinstall '^QEMU-CHAINLOAD '
 	check "same-build reinstall directly selects OpenWrt" is_eq "$(boot_outcome s14-reinstall):$(img_flag "$DISK")" reboot:ota:kernel
 	check "flip records last-test started" is_eq "$(c5os_cat "$DISK" /opencreator-os/last-test)" "started qemu-test"
+	check "stock flip: Rebooting into OpenWrt, then the app ends without Continue" bash -c "grep -q '^QEMU-UI INFO reboot Rebooting into OpenWrt (slot 1)' \"\$1\" && ! grep -q '^QEMU-UI-CONTINUE' \"\$1\"" _ "$RUN/s14-reinstall.log"
 }
 
 # S15: failed test boots return to stock by themselves and stock reports
