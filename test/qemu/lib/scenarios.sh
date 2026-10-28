@@ -187,6 +187,7 @@ run 30 logs ls /data/opencreator-os/logs/
 run 30 overlay mount | grep -E ' on /overlay | on / '
 run 30 deadline ps w | grep '[c]5_test_deadline'
 run 300 hook i=0; until [ -f /data/opencreator-os/last-test.seen ]; do i=$((i+1)); [ $i -lt 300 ] || exit 1; sleep 1; done; cat /data/opencreator-os/last-test.seen; logread | grep -E 'c5-usb-hook|test: '
+run 300 swap i=0; until grep -q '^/data/swapfile[[:space:]]' /proc/swaps; do i=$((i+1)); [ $i -lt 300 ] || exit 1; sleep 1; done; cat /proc/swaps; ls -l /data/swapfile; cat /proc/sys/vm/swappiness
 EOF
 	boot s2-openwrt "$DISK" "$(chainload_cmdline s2-stock)" "$st" "$RUN/stick-s2-stock.img"
 	check "OpenWrt shell reached and c5-booted ran" res_has s2-openwrt waitboot 'c5: booted:'
@@ -214,6 +215,7 @@ EOF
 	check "overlay (rootfs_data) is ext4 after the squashfs on p2" overlay_is_ext4 "$DISK" 2
 	check "wifi.conf persisted in the overlay upper dir" bash -c "debugfs -R 'cat /upper/etc/c5/wifi.conf' '$(overlay_spec "$DISK" 2)' 2>/dev/null | grep -q '^SSID='"
 	check "logs written to c5os opencreator-os/logs" bash -c "for f in dmesg-last.txt logread-last.txt bootlog-last.txt; do debugfs -R \"stat /opencreator-os/logs/\$f\" '$(c5os_spec "$DISK")' 2>/dev/null | grep -q '^Inode:' || exit 1; done"
+	check "c5-swap created /data/swapfile (mode 600) and swap is on" bash -c "printf '%s\n' \"\$1\" | grep -qE '^/data/swapfile[[:space:]]+file[[:space:]]+[1-9]' && printf '%s\n' \"\$1\" | grep -qE '^-rw------- '" _ "$(res_out "$RUN/s2-openwrt.res" swap)"
 	# run.sh starts the scenarios that use prepare_committed after S2
 	if [ "$FAILS" = 0 ] && [ ! -s "$RUNROOT/committed.img" ]; then
 		cp --sparse=always "$DISK" "$RUNROOT/committed.img.s2" && mv "$RUNROOT/committed.img.s2" "$RUNROOT/committed.img"

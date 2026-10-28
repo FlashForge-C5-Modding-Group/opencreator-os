@@ -5,7 +5,8 @@
 # commit a pending upgrade, and remember this slot's tested kernel. A test
 # boot (chainloaded from stock) that is not healthy fails back to stock at
 # once (c5_test_fail); a healthy one stops its preinit deadline. A committed
-# install records last-test "ok", then the USB hook it deferred runs.
+# install records last-test "ok", then the USB hook it deferred runs. Last,
+# 'c5-swap create' turns on the c5os swap file, creating it if it is missing.
 
 START=99
 
@@ -70,6 +71,7 @@ c5_booted_check() {
 		rm -f /tmp/c5-usb-hook.deferred
 		/usr/libexec/c5-usb-hook now
 	fi
+	/etc/init.d/c5-swap create
 }
 
 boot() {

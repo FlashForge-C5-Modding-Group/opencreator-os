@@ -278,6 +278,22 @@ edited on OpenWrt survives a sysupgrade.
 OpenWrt mounts `userdata` only briefly to repair stock or stage a changed
 kernel for stock's `c5-chainload.sh`.
 
+`/data/swapfile` is a 256 MiB swap file (mode 600). After the health
+decision on the first boot that finds it missing, `c5-booted` runs
+`/etc/init.d/c5-swap create`, which writes it with `dd` (no holes), runs
+`mkswap` and turns it on; later boots turn it on through the fixed fstab's
+`config swap` section when `block` mounts `/data`, and `c5-swap create`
+turns it on if it is still off (sysupgrade restores the saved fstab, so an
+install upgraded from an image without that section lacks it). It is not
+created when `/data` is not `c5os` or when `c5os` would keep less than
+64 MiB free (`logread -e c5-swap` says why). Swappiness stays at the kernel
+default (60). The file lives on `c5os`, not in the overlay, so sysupgrade
+keeps it.
+Swap is turned off at shutdown before `/data` is unmounted (`c5-swap`
+stop, K89) and by sysupgrade before it switches to its RAM root; otherwise
+the file would keep `c5os` mounted, leaving it to journal recovery, and
+sysupgrade could not mount it read-only to read `good-kernel`.
+
 `sysupgrade` writes the OpenWrt slot from RAM, never the stock slot. If the
 new kernel's SHA-256 matches `good-kernel`, it keeps the flag on OpenWrt and
 needs no pending commit or chainload. Otherwise it leaves the flag on stock,

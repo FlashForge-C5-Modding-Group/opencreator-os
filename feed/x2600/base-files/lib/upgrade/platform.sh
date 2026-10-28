@@ -70,6 +70,14 @@ platform_check_image() {
 	return 0
 }
 
+# stage2, before the ramfs switch: an active swap file keeps c5os mounted
+# read-write after /data is detached, so platform_do_upgrade's read-only
+# mount of c5os would fail (EBUSY) and miss good-kernel.
+platform_pre_upgrade() {
+	swapoff "$C5_DATA/swapfile" 2>/dev/null
+	return 0
+}
+
 # Zero the start of the area fstools uses as the overlay (squashfs bytes_used
 # rounded up to 64 KiB) so the new rootfs never mounts a stale overlay.
 c5_wipe_overlay() { # <rootfs dev> <partition bytes>
