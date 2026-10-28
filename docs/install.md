@@ -206,7 +206,7 @@ The backend offers these actions (menu labels apply when a display works):
 
 | Menu | Headless `ACTION` | What it does |
 |------|-------------------|--------------|
-| Update OpenWrt | `update` | Checks `sysupgrade.tar` against the stick's `SHA256SUMS`, runs `sysupgrade -T`, then `sysupgrade` with configuration kept. |
+| Update / Repair OpenWrt | `update` | Checks `sysupgrade.tar` against the stick's `SHA256SUMS`, runs `sysupgrade -T`, saves the configuration with `sysupgrade -b`, drops the files the image owns (`/etc/config/fstab`) from it, then runs `sysupgrade -f` with that backup. User settings (Wi-Fi, passwords, SSH keys, hostname) stay; the image-owned files are reset to the image's. Reinstalling the running build is allowed and repairs those files. |
 | Swap to stock | `swap` | Refuses unselectable stock; clears `pending-commit`, resets the counter, selects stock and reboots. |
 | Repair stock | `repair-stock` | Checks and restores the saved stock slot from `userdata` (`/usr/data/opencreator-os/stock/` on stock), reads it back, then selects stock and reboots only if selectable. The app asks first ("Repair stock" enabled after 5 s, or "Cancel"); headless runs do not ask. |
 
@@ -282,9 +282,10 @@ kernel for stock's `c5-chainload.sh`.
 decision on the first boot that finds it missing, `c5-booted` runs
 `/etc/init.d/c5-swap create`, which writes it with `dd` (no holes), runs
 `mkswap` and turns it on; later boots turn it on only through the fixed
-fstab's `config swap` section when `block` mounts `/data`. An install
-upgraded with sysupgrade from an image whose fstab had no such section keeps
-its old fstab and gets no swap; install from the USB stick to get it. It is
+fstab's `config swap` section when `block` mounts `/data`. A plain
+sysupgrade keeps the old fstab, so an install upgraded that way from an image
+whose fstab had no such section gets no swap; "Update / Repair OpenWrt" from
+the install stick resets fstab to the image's. It is
 not created when `/data` is not `c5os` or when `c5os` would keep less than
 64 MiB free (`logread -e c5-swap` says why). Swappiness stays at the kernel
 default (60). The file lives on `c5os`, not in the overlay, so sysupgrade

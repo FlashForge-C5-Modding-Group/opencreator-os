@@ -71,7 +71,7 @@ Not a spec. Labels: **Observed** (seen on the printer or in a stock file),
   The jump into OpenWrt is not part of the demo (QEMU covers it).
   `libsdl2-dev` (2.30.0) is installed in WSL.
 - **Decided:** the same install stick runs from OpenWrt's boot-time USB hook.
-  Its actions are "Update OpenWrt", "Swap to stock" and "Repair stock";
+  Its actions are "Update / Repair OpenWrt", "Swap to stock" and "Repair stock";
   headless operation reads `opencreator-os/ACTION`. No action file on
   headless OpenWrt means no action; stock still defaults to install.
 - **Decided:** only the exact model pairs `Creator5 0028` and

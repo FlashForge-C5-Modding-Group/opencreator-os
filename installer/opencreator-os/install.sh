@@ -95,6 +95,9 @@ UD_FS_MARGIN_MIB=32
 UD_HEADROOM_MIB=128
 BK_CHUNK_MIB=1024
 BK_DIR=emmc-backup
+# Files a sysupgrade configuration backup keeps although the image owns them
+# (keep.d). Update / Repair OpenWrt drops them, so the image's copies apply.
+IMAGE_OWNED='etc/config/fstab'
 DATA_DOWN=0
 
 finish() {  # finish ID TEXT EXITCODE
@@ -944,6 +947,19 @@ do_install() {
 	to_openwrt
 }
 
+# update_config OUT: sysupgrade's configuration backup without IMAGE_OWNED
+update_config() {
+	w=/tmp/c5-cfg
+	rm -rf "$w" "$w.tgz" "$w.list" "$w.drop" "$w.keep" "$1" && mkdir "$w" || return 1
+	sysupgrade -b "$w.tgz" || return 1
+	tar -xzf "$w.tgz" -C "$w" && tar -tzf "$w.tgz" > "$w.list" || return 1
+	# shellcheck disable=SC2086  # one path per word
+	printf '%s\n' $IMAGE_OWNED > "$w.drop" &&
+		grep -vxF -f "$w.drop" "$w.list" > "$w.keep" &&
+		tar -czf "$1" -C "$w" -T "$w.keep" || return 1
+	rm -rf "$w" "$w.tgz" "$w.list" "$w.drop" "$w.keep"
+}
+
 openwrt_main() {
 	report_installed
 	if [ "$UI" != 1 ] && [ -z "$ACTION" ]; then
@@ -957,7 +973,7 @@ openwrt_main() {
 	fi
 	if [ "$CHECK" != 1 ]; then
 		ui_menu main "opencreator-os $VERSION\nOpenWrt slot $OWN" \
-			"Update OpenWrt" "Swap to stock" "Repair stock"
+			"Update / Repair OpenWrt" "Swap to stock" "Repair stock"
 		case "$UI_CHOICE" in
 		1) ACTION=update ;;
 		2) ACTION=swap ;;
@@ -974,9 +990,11 @@ openwrt_main() {
 			abort "sysupgrade.tar checksum mismatch"
 		fi
 		sysupgrade -T "$STICK/sysupgrade.tar" || abort "sysupgrade image check failed"
+		update_config /tmp/c5-repack.tgz || abort "cannot save the configuration"
+		log "update: configuration kept without the image-owned $IMAGE_OWNED"
 		if [ "$CHECK" != 1 ]; then
-			ui_info update "Updating OpenWrt\nDo not power off."
-			sysupgrade "$STICK/sysupgrade.tar" || finish failed "Update FAILED" 1
+			ui_info update "Updating / repairing OpenWrt\nDo not power off."
+			sysupgrade -f /tmp/c5-repack.tgz "$STICK/sysupgrade.tar" || finish failed "Update / Repair FAILED" 1
 		fi
 		;;
 	swap | repair-stock)

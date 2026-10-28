@@ -195,5 +195,7 @@ Packages come from `DEFAULT_PACKAGES` in `feed/x2600/Makefile` (plus
 ## Base files
 
 Files that sysupgrade preserves (such as `/etc/config/fstab`) get no
-migration code: a change to one reaches an existing install only through a
-fresh install from the USB stick.
+migration code: a change to one reaches an existing install through a fresh
+install or "Update / Repair OpenWrt" from the USB stick, which drops the
+image-owned files listed in `IMAGE_OWNED` (`installer/opencreator-os/install.sh`)
+from the kept configuration.

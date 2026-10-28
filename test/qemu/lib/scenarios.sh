@@ -332,7 +332,8 @@ EOF
 	cp "$w/x/$dir/kernel" "$RUN/v2-kernel.uimage"
 }
 
-# S5: known-good direct upgrade, changed-kernel test/commit, garbage and cut.
+# S5: known-good direct upgrade, Update / Repair OpenWrt from the install
+# stick, changed-kernel test/commit, garbage and cut.
 scenario_S5() {
 	new_disk
 	prepare_committed || return 0
@@ -359,6 +360,28 @@ EOF
 	boot s5-direct-next "$DISK" "$(spl_root "$DISK")" "$RUN/s5-direct-next.steps"
 	check "same-kernel upgraded root boots directly" res_has s5-direct-next version '^qemu-v2-'
 	check "same-kernel healthy boot resets counter" is_eq "$(img_tries "$DISK")" "C5TRIES1 0"
+
+	# Update / Repair OpenWrt (app) with the same build: the edited fstab is
+	# reset to the image's, a user setting survives
+	new_disk
+	prepare_committed || return 0
+	c5os_rm "$DISK" /opencreator-os/last-test  # no "OpenWrt installed" screen first
+	make_ui_payload "$RUN/payload-s5-repair" "menu_main=1 hold=main" || { fatal "make-install-stick.sh failed"; return 0; }
+	make_stick "$RUN/payload-s5-repair" "$RUN/stick-s5-repair.img"
+	cat > "$RUN/s5-repair.steps" <<'EOF'
+shell 400
+run 600 held i=0; until [ -f /tmp/qemu-ui-held ]; do i=$((i+1)); [ $i -lt 600 ] || exit 1; sleep 1; done
+run 30 edit uci delete fstab.@swap[0] && uci commit fstab && ! cmp -s /etc/config/fstab /rom/etc/config/fstab && uci set system.@system[0].notes=keepme && uci commit system
+send touch /tmp/qemu-ui-release
+wait-exit 900
+EOF
+	boot s5-repair "$DISK" "$(spl_root "$DISK")" "$RUN/s5-repair.steps" "$RUN/stick-s5-repair.img"
+	steps_openwrt "$RUN/s5-repair-next.steps" <<'EOF'
+run 30 cfg cmp -s /etc/config/fstab /rom/etc/config/fstab && echo fstab=image; echo "notes=$(uci -q get system.@system[0].notes)"
+EOF
+	boot s5-repair-next "$DISK" "$(spl_root "$DISK")" "$RUN/s5-repair-next.steps"
+	check "Update / Repair OpenWrt: same build reinstalled, edited fstab reset to the image's, user setting kept" \
+		is_eq "$(res_rc "$RUN/s5-repair.res" edit):$(boot_outcome s5-repair):$(res_out "$RUN/s5-repair-next.res" cfg | tr '\n' ' ')" "0:reboot:fstab=image notes=keepme "
 
 	new_disk
 	prepare_committed || return 0
