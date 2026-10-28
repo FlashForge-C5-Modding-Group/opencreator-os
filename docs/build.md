@@ -43,8 +43,9 @@ for the PC). `tools/ui-demo.sh APP VERSION_DIR` runs the SDL build under WSLg
 against the real installer and a loop-mounted image laid out like the
 printer's eMMC (needs sudo; a backup in the demo writes about 7.3 GB).
 
-`build.sh` clones OpenWrt v24.10.3 into `$WORK/openwrt`, links
-`feed/x2600` as `target/linux/x2600`, installs the package feeds, unpacks the
+`build.sh` clones OpenWrt v24.10.8 into `$WORK/openwrt`, links
+`feed/x2600` as `target/linux/x2600`, installs the package feeds (again
+whenever `OPENWRT_TAG` changes), unpacks the
 SDK kernel (`kernel/prepare.sh`), writes `.config` from `config/openwrt.seed`
 plus `CONFIG_EXTERNAL_KERNEL_TREE` and `CONFIG_VERSION_NUMBER` (`git
 describe`), and runs `make`. Options: `--menuconfig`, `--kernel-menuconfig`,

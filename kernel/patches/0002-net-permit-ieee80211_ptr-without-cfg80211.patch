@@ -1,7 +1,8 @@
 From: Christian Marangi <ansuelsmth@gmail.com>
 Subject: [PATCH] net: permit ieee80211_ptr even with no CFG80211 support
 
-Adapted for the Ingenic SDK 6.6 tree from OpenWrt v24.10.3
+Adapted for the Ingenic SDK 6.6 tree from OpenWrt v24.10.3 (identical in
+v24.10.8)
 target/linux/generic/pending-6.6/731-net-permit-ieee80211_ptr-even-with-no-CFG82111-suppo.patch
 (GPL-2.0, as the kernel). OpenWrt builds cfg80211/mac80211 out of tree
 (backports), so the kernel itself has CFG80211 off but must still carry

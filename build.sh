@@ -13,7 +13,7 @@ REPO=$(cd "$(dirname "$0")" && pwd)
 WORK=${WORK:-$HOME/build/opencreator-os}
 OUT=${OUT:-/mnt/f/creator5-dev/opencreator-os-builds}
 JOBS=${JOBS:-$(nproc)}
-OPENWRT_TAG=v24.10.3
+OPENWRT_TAG=v24.10.8
 OW=$WORK/openwrt
 
 log() { printf '\n=== %s\n' "$*"; }
@@ -61,16 +61,13 @@ mkdir -p "$OW/target/linux/x2600"
 find "$OW/target/linux/x2600" -type d -exec chmod 0755 {} + -o -type f -exec chmod 0644 {} +
 git -C "$REPO" ls-files -s feed/x2600 | awk '$1 == "100755" { sub(/^feed\/x2600\//, "", $4); print $4 }' |
 	while IFS= read -r f; do [ ! -e "$OW/target/linux/x2600/$f" ] || chmod 0755 "$OW/target/linux/x2600/$f"; done
-# Extra patches for OpenWrt packages, needed because the vendor kernel is
-# older than the 6.6 release OpenWrt targets. Mirrors the OpenWrt tree layout.
-log "sync openwrt-patches"
-(cd "$REPO/openwrt-patches" && find . -type f) | while IFS= read -r f; do
-	install -D -m 0644 "$REPO/openwrt-patches/$f" "$OW/$f"
-done
 
-if [ ! -d "$OW/feeds/packages" ]; then
-	log "feeds"
+# feeds.conf.default pins each feed to a commit of the release: update the
+# feeds whenever the checked-out tag changes.
+if [ ! -d "$OW/feeds/packages" ] || [ "$(cat "$OW/.c5-feeds-tag" 2>/dev/null)" != "$OPENWRT_TAG" ]; then
+	log "feeds ($OPENWRT_TAG)"
 	(cd "$OW" && ./scripts/feeds update -a && ./scripts/feeds install -a)
+	echo "$OPENWRT_TAG" > "$OW/.c5-feeds-tag"
 fi
 
 log "kernel tree"
