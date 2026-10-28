@@ -384,9 +384,12 @@ boot() {
 	[ -n "$stick" ] && extra=' qemu_stick=1'
 	case "$root" in
 	cmdline:*) cl=${root#cmdline:} ;;
-	# the SPL's fixed command line (minus mem=/rmem=/lpj=, which describe the
-	# X2600's memory map) + the X2600 kernel's built-in ieee754=relaxed
-	*) cl="console=ttyS0,115200n8 loglevel=8 init=/linuxrc root=$root rootwait rootfstype=squashfs ro ieee754=relaxed$extra" ;;
+	# the X2600 kernel's built-in prefix ($X2600_CMDLINE: ieee754=relaxed, the
+	# screen console) + the SPL's fixed command line (minus mem=/rmem=/lpj=,
+	# which describe the X2600's memory map). Stock boots here carry the prefix
+	# too, so a chainload line built from their /proc/cmdline has it once, as
+	# the chainloaded X2600 kernel adds it in front of stock's line.
+	*) cl="$X2600_CMDLINE console=ttyS0,115200n8 loglevel=8 init=/linuxrc root=$root rootwait rootfstype=squashfs ro$extra" ;;
 	esac
 	# User-mode networking provides the normal LAN/DHCP environment; boot
 	# health itself depends only on reaching c5-booted with c5os mounted.

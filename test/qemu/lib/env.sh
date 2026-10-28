@@ -43,6 +43,10 @@ KSHA256=${KSHA256:-e7df81e588d70fab5ec3ec3bb04ac53d51f0860fc3b1ec45e0a4167a02689
 # kernel (squashfs "decompression failed", even uncompressed images fault).
 QEMU_CPU=${QEMU_CPU:-24Kf}
 QEMU_MEM=${QEMU_MEM:-256}
+# The product kernel's built-in command-line prefix (CONFIG_CMDLINE in
+# kernel/creator5pro.config, put in front of the SPL's argv); the QEMU
+# kernel has none, so the harness passes it.
+X2600_CMDLINE=$(sed -n 's/^CONFIG_CMDLINE="\(.*\)"$/\1/p' "$QREPO/kernel/creator5pro.config")
 VMLINUX=$QWORK/vmlinux-$KVER-$(cat "$QDIR/kernel/malta.config" "$QDIR/kernel/build.sh" | sha256sum | cut -c1-8)
 
 # Printer GPT (sectors), see docs/printer-facts.md. p1-p6 are exact; p7
