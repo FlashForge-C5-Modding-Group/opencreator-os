@@ -32,7 +32,7 @@ stock back. A kernel whose SHA-256 matches `c5os`'s `good-kernel` can skip
 the RAM test and boot directly instead.
 
 **Three failed boots, then stock.**
-1. Early preinit (`05_c5_tryboot`) increments a counter in one `ota` sector
+1. Early preinit (`05_c5_bootcount`) increments a counter in one `ota` sector
    at offset 192 KiB (`C5TRIES1 N`; empty or malformed data means zero).
    The first three attempts leave the flag alone. If those fail to become
    healthy, the fourth attempt selects stock, resets the counter and reboots.

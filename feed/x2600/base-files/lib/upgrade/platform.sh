@@ -18,7 +18,7 @@
 # userdata so stock can test-boot the newly written slot.
 #
 # Config: platform_copy_config stores $UPGRADE_BACKUP on c5os as
-# opencreator-os/sysupgrade.tgz; preinit 79_c5_move_config moves it to
+# opencreator-os/sysupgrade.tgz; preinit 79_c5_import moves it to
 # /sysupgrade.tgz on the first boot of the new image, and 80_mount_root
 # restores it.
 

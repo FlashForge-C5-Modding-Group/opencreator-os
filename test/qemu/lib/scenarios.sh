@@ -162,14 +162,14 @@ run 30 overlay mount | grep -E ' on /overlay | on / '
 EOF
 	boot s2-openwrt "$DISK" "$(chainload_cmdline s2-stock)" "$st"
 	check "OpenWrt shell reached and c5-booted ran" res_has s2-openwrt waitboot 'c5: booted:'
-	check "preinit counted the boot without changing the flag" res_has s2-openwrt waitboot 'c5: tryboot: slot 1 booting; tries=1/3; flag untouched'
+	check "preinit counted the boot without changing the flag" res_has s2-openwrt waitboot 'c5: bootcount: slot 1 booting; tries=1/3; flag untouched'
 	check "c5-booted committed slot 1" res_has s2-openwrt waitboot 'c5: booted: .*flag -> slot 1 \(OpenWrt\)'
 	check "flag is now ota:kernel" is_eq "$(img_flag "$DISK")" ota:kernel
 	check "healthy boot reset tries" is_eq "$(img_tries "$DISK")" "C5TRIES1 0"
 	check "healthy kernel checksum saved on c5os" is_eq "$(c5os_cat "$DISK" /opencreator-os/good-kernel)" "$OW_K_SUM"
 	check "hostname derived from hook model" res_has s2-openwrt hostname '^creator5pro$'
 	check "bootlog records healthy boot" bash -c "printf '%s' \"\$1\" | grep -q 'booted: slot 1 healthy; good kernel recorded'" _ "$(img_bootlog "$DISK")"
-	check "bootlog order: tryboot before booted" bash -c "printf '%s\n' \"\$1\" | awk '/tryboot: slot 1 booting/{t=NR} /booted: .*flag -> slot 1/{b=NR} END{exit !(t && b && t < b)}'" _ "$(img_bootlog "$DISK")"
+	check "bootlog order: bootcount before booted" bash -c "printf '%s\n' \"\$1\" | awk '/bootcount: slot 1 booting/{t=NR} /booted: .*flag -> slot 1/{b=NR} END{exit !(t && b && t < b)}'" _ "$(img_bootlog "$DISK")"
 	check "/rom is the squashfs root, / the overlay" res_has s2-openwrt mounts "^overlayfs:/overlay / overlay "
 	check "/overlay is ext4 on a loop device" res_has s2-openwrt mounts '^/dev/loop[0-9]+ /overlay ext4'
 	check "/data = c5os (mmcblk0p8)" res_has s2-openwrt mounts '^/dev/mmcblk0p8 /data ext4'
@@ -198,7 +198,7 @@ run 30 persist echo qemu-persist-$$ > /etc/qemu-persist; sync; cat /etc/qemu-per
 run 30 fstab uci -q get fstab.data.label
 EOF
 	boot s3-a "$DISK" "$(spl_root "$DISK")" "$st"
-	check "boot 1: third attempt retains OpenWrt" res_has s3-a waitboot 'tryboot: slot 1 booting; tries=3/3; flag untouched'
+	check "boot 1: third attempt retains OpenWrt" res_has s3-a waitboot 'bootcount: slot 1 booting; tries=3/3; flag untouched'
 	check "boot 1: fixed label resolves to /data" res_has s3-a mounts '^/dev/mmcblk0p8 /data ext4'
 	check "boot 1: healthy without a pending commit" res_has s3-a waitboot 'booted: slot 1 healthy; good kernel recorded'
 	check "boot 1: no redundant flag commit" log_lacks s3-a 'booted: committed'
@@ -211,7 +211,7 @@ run 30 persist cat /etc/qemu-persist
 EOF
 	boot s3-b "$DISK" "$(spl_root "$DISK")" "$st"
 	check "boot 2: persisted file survives" is_eq "$(res_out "$RUN/s3-b.res" persist | tail -n 1)" "$token"
-	check "boot 2: starts counting at one again" res_has s3-b waitboot 'tryboot: slot 1 booting; tries=1/3'
+	check "boot 2: starts counting at one again" res_has s3-b waitboot 'bootcount: slot 1 booting; tries=1/3'
 	check "boot 2: health resets counter" is_eq "$(img_tries "$DISK")" "C5TRIES1 0"
 	check "boot 2: flag unchanged" is_eq "$(img_flag "$DISK")" ota:kernel
 }
@@ -224,13 +224,13 @@ scenario_S4() {
 	local st n
 	for n in 1 2 3; do
 		st=$RUN/s4-fail-$n.steps
-		printf 'kill-when 400 c5: tryboot: slot 1 booting; tries=%s/3; flag untouched\n' "$n" > "$st"
+		printf 'kill-when 400 c5: bootcount: slot 1 booting; tries=%s/3; flag untouched\n' "$n" > "$st"
 		boot "s4-fail-$n" "$DISK" "$(spl_root "$DISK")" "$st"
 		check "failed boot $n counts after preinit" is_eq "$(img_tries "$DISK")" "C5TRIES1 $n"
 		check "failed boot $n keeps OpenWrt selected" is_eq "$(img_flag "$DISK")" ota:kernel
 	done
 	st=$RUN/s4-fallback.steps
-	printf 'expect 400 c5: tryboot: slot 1 failed 3 boots; flag -> slot 2 \\(stock\\); rebooting\nwait-exit 240\n' > "$st"
+	printf 'expect 400 c5: bootcount: slot 1 failed 3 boots; flag -> slot 2 \\(stock\\); rebooting\nwait-exit 240\n' > "$st"
 	boot s4-fallback "$DISK" "$(spl_root "$DISK")" "$st"
 	check "fourth preinit reboots into stock" is_eq "$(boot_outcome s4-fallback):$(img_flag "$DISK")" reboot:ota:kernel2
 	check "fallback resets counter" is_eq "$(img_tries "$DISK")" "C5TRIES1 0"
@@ -243,7 +243,7 @@ scenario_S4() {
 	printf 'C5TRIES1 3\n' | dd of="$DISK" bs=512 seek=$((PSTART[5] + 384)) conv=sync,notrunc status=none
 	printf 'C5STOCKINVALID1 slot' | dd of="$DISK" bs=512 seek=$((PSTART[5] + 256)) conv=sync,notrunc status=none
 	st=$RUN/s4-blocked.steps
-	echo 'kill-when 400 c5: tryboot: slot 1 booting; tries=4; .*NO fallback' > "$st"
+	echo 'kill-when 400 c5: bootcount: slot 1 booting; tries=4; .*NO fallback' > "$st"
 	boot s4-blocked "$DISK" "$(spl_root "$DISK")" "$st"
 	check "unselectable stock never gets the flag" is_eq "$(img_flag "$DISK")" ota:kernel
 	check "blocked fourth attempt still counts" is_eq "$(img_tries "$DISK")" "C5TRIES1 4"
@@ -438,7 +438,7 @@ scenario_S6() {
 	check "interrupted repair retains OpenWrt flag" is_eq "$(img_flag "$DISK")" ota:kernel
 	check "interrupted repair marks stock invalid" stockinv_set
 	boot s6-retry "$DISK" "$(spl_root "$DISK")" "$st" "$stick"
-	check "retry refuses fallback to invalid stock" log_has s6-retry 'tryboot: .*NO fallback'
+	check "retry refuses fallback to invalid stock" log_has s6-retry 'bootcount: .*NO fallback'
 	check "same repair stick completes on next run" is_eq "$(boot_outcome s6-retry):$(img_flag "$DISK")" reboot:ota:kernel2
 	check "retry restores exact stock contents" is_eq "$(img_part_sum "$DISK" 3 $((PSIZE[3] * 512)))$(img_part_sum "$DISK" 4 "$STOCK_SQ_LEN")" "$BASE_P3$STOCK_SQ_SUM"
 	check "retry clears invalid marker" stockinv_clear
@@ -489,7 +489,7 @@ EOF
 	st=$RUN/s10-openwrt.steps
 	steps_openwrt "$st" < /dev/null
 	boot s10-openwrt "$DISK" "$(chainload_cmdline s10-stock)" "$st"
-	check "foreign chainload leaves counter and flag untouched" res_has s10-openwrt waitboot 'tryboot: slot 1 booting \(c5.nocommit=1\); counter and flag untouched'
+	check "foreign chainload leaves counter and flag untouched" res_has s10-openwrt waitboot 'bootcount: slot 1 booting \(c5.nocommit=1\); counter and flag untouched'
 	check "foreign chainload does not start counter" is_eq "$(img_tries "$DISK")" ""
 	check "c5-booted did not commit (nocommit)" res_has s10-openwrt waitboot 'booted: chainloaded kernel is not slot 1.s own kernel \(c5\.nocommit=1\)'
 	check "flag still on stock" is_eq "$(img_flag "$DISK")" ota:kernel2

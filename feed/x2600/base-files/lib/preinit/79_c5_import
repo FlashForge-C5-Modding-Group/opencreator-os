@@ -1,8 +1,8 @@
 # shellcheck shell=sh
 # shellcheck disable=SC3043,SC1091  # busybox ash supports 'local'; slot.sh is on the target
 #
-# Import installer settings and saved sysupgrade config from c5os before
-# uci-defaults and fstab run.
+# Import installer Wi-Fi, SSH keys, model selection and saved sysupgrade
+# config from c5os before uci-defaults and fstab run.
 
 # $1 = directory holding installer settings
 c5_import_creds() {
@@ -21,20 +21,20 @@ c5_import_creds() {
 }
 
 # Runs with c5os mounted at /tmp/c5-c5os (c5_with_part).
-c5_take_sysupgrade() {
+c5_import_from() {
 	local f=/tmp/c5-c5os/opencreator-os/sysupgrade.tgz
 	c5_import_creds /tmp/c5-c5os/opencreator-os
 	[ -f "$f" ] || return 0
 	if mv -f "$f" /sysupgrade.tgz; then
-		c5_bootlog "move_config: sysupgrade.tgz staged for restore"
+		c5_bootlog "import: sysupgrade.tgz staged for restore"
 	else
-		c5_bootlog "move_config: moving sysupgrade.tgz failed"
+		c5_bootlog "import: moving sysupgrade.tgz failed"
 	fi
 }
 
-c5_move_config() {
+c5_import() {
 	. /lib/c5/slot.sh
-	c5_with_part c5os /tmp/c5-c5os rw,noatime c5_take_sysupgrade
+	c5_with_part c5os /tmp/c5-c5os rw,noatime c5_import_from
 }
 
-boot_hook_add preinit_mount_root c5_move_config
+boot_hook_add preinit_mount_root c5_import

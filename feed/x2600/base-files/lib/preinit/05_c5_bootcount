@@ -1,0 +1,44 @@
+# shellcheck shell=sh
+# shellcheck disable=SC3043,SC1091  # busybox ash supports 'local'; slot.sh is on the target
+#
+# Count consecutive boots before the overlay is mounted. Healthy boots
+# reset the counter in c5-booted; untested chainloaded kernels do not count.
+
+c5_bootcount() {
+	. /lib/c5/slot.sh
+	local own other why n
+	own=$(c5_own_slot) || {
+		c5_bootlog "bootcount: root $(c5_root_dev) is not an eMMC slot; flag untouched"
+		return 0
+	}
+	c5_bootlog_reset
+	if c5_nocommit; then
+		c5_bootlog "bootcount: slot $own booting (c5.nocommit=1); counter and flag untouched"
+		return 0
+	fi
+	n=$(c5_tries_read) || {
+		c5_bootlog "bootcount: cannot read boot counter; flag untouched"
+		return 0
+	}
+	n=$((n + 1))
+	why=$(c5_stock_blocker) || why=
+	if [ "$n" -gt "$C5_TRIES_MAX" ] && [ -z "$why" ]; then
+		other=$(c5_other_slot)
+		if c5_flag_write "$other"; then
+			c5_tries_write 0 || c5_bootlog "bootcount: counter reset FAILED"
+			c5_bootlog "bootcount: slot $own failed $C5_TRIES_MAX boots; flag -> slot $other (stock); rebooting"
+			reboot -f
+		else
+			c5_bootlog "bootcount: FLAG WRITE FAILED (flag now '$(c5_flag_read)')"
+		fi
+		return 0
+	fi
+	c5_tries_write "$n" || c5_bootlog "bootcount: counter write FAILED"
+	if [ -n "$why" ]; then
+		c5_bootlog "bootcount: slot $own booting; tries=$n; $why; flag untouched (NO fallback)"
+	else
+		c5_bootlog "bootcount: slot $own booting; tries=$n/$C5_TRIES_MAX; flag untouched"
+	fi
+}
+
+boot_hook_add preinit_main c5_bootcount
