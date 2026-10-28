@@ -55,6 +55,8 @@ installer from there. With `os-installer` on the stick it loads stock's touch
 driver when present and starts the app, which runs `install.sh --ui` and
 draws the screens the installer asks for. Without the app, or when the app
 finds no display or touchscreen, `install.sh` runs headless (see below).
+On OpenWrt the kernel shows its boot log on the panel; the hook unbinds that
+console (fbcon) while the app runs and binds it again when the app exits.
 **Use headless actions on OpenWrt until display bring-up is verified on
 hardware; no OpenWrt screen is promised.** The changes described here have
 not been validated on a printer.

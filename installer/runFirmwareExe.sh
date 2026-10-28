@@ -9,8 +9,17 @@
 # the screens and runs install.sh --ui as its child; the app stays this
 # hook's foreground child so stock does not resume booting during a jump.
 # No app, or no display/touch (app exit 3): install.sh runs headless.
+# OpenWrt's kernel shows its boot log on the panel (fbcon): unbind fbcon while
+# the app owns /dev/fb0 so console text and cursor stay off its screens, bind
+# it again when the app exits. Stock has no fbcon, so nothing changes there.
 S=$(dirname "$0")
 T=/tmp/c5os
+fbcon_bind() {
+	for v in /sys/class/vtconsole/vtcon*; do
+		grep -q 'frame buffer' "$v/name" 2>/dev/null && echo "$1" > "$v/bind"
+	done
+	return 0
+}
 rm -rf "$T"
 cp -r "$S/opencreator-os" "$T" || exit 1
 chmod 755 "$T/os-installer" "$T/bin/"* 2>/dev/null
@@ -27,8 +36,10 @@ if [ -x "$T/os-installer" ]; then
 			i=$((i + 1))
 		done
 	fi
+	fbcon_bind 0
 	"$T/os-installer" --log "$S/os-installer.log" -- sh "$T/install.sh" --from-stick "$S" --hook --ui "$@"
 	rc=$?
+	fbcon_bind 1
 	[ "$rc" = 3 ] || exit "$rc"
 fi
 exec sh "$T/install.sh" --from-stick "$S" --hook "$@"

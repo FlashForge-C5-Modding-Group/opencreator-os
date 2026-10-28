@@ -247,8 +247,9 @@ stick with the install stick or with opencreator-fs's stick.
 Use the same stick built by `tools/make-install-stick.sh`, without the app
 for now. OpenWrt's `c5-usb-hook` (START=19) mounts the first mountable FAT
 USB candidate read-write at `/mnt`, runs `runFirmwareExe.sh` with the stored
-model, then unmounts when it returns. There is no screen on OpenWrt until
-display bring-up is verified on hardware. Missing or invalid
+model, then unmounts when it returns. Apart from the kernel's boot log (not
+yet seen on hardware) there is no screen on OpenWrt until display bring-up
+is verified on hardware. Missing or invalid
 `/data/opencreator-os/model` skips the hook; inspect
 `logread -e c5-usb-hook` over SSH.
 
