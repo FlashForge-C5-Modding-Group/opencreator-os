@@ -81,7 +81,13 @@ describe`), and runs `make`. Options: `--menuconfig`, `--kernel-menuconfig`,
   `CONFIG_TOUCHSCREEN_GOODIX`.
 - `CONFIG_WATCHDOG=y`, `CONFIG_INGENIC_WDT=y` and the enabled watchdog DTS
   node provide `/dev/watchdog`; procd opens and feeds it without a separate
-  service. Watchdog operation has not been verified on hardware.
+  service. `kernel/patches/0005` (applied by `kernel/prepare.sh` with the
+  other `kernel/patches/`) makes the SDK driver mark a counter that is
+  already enabled at probe as running. The SPL leaves it off; `chainload.ko`
+  arms it for a test boot. With `CONFIG_WATCHDOG_HANDLE_BOOT_ENABLED=y`
+  (`feed/x2600/config-6.6`) the watchdog core then feeds it every half
+  timeout (default heartbeat 15 s) until procd opens it. Watchdog operation
+  has not been verified on hardware.
 - Display/touch bring-up is in progress. Even with the framebuffer and
   Goodix drivers configured, use the installer headless on OpenWrt until
   display bring-up is verified on hardware; the stock touchscreen flow is

@@ -27,16 +27,61 @@ the spare slot and keeps the flag on stock for the RAM test, which Install
 and Swap to OpenWrt then run (by hand under stock:
 `c5-chainload.sh stage /dev/mmcblk0pN` + `go`): `chainload.ko` loads the
 slot's OpenWrt kernel and jumps to it. The test follows a real slot write; it
-is not a zero-write test. If it hangs before committing, a power cycle brings
-stock back; a headless install stick left in does not start it again. A
-kernel whose SHA-256 matches `c5os`'s `good-kernel` skips the RAM test: the
-installer points the flag at it and reboots.
+is not a zero-write test. If it fails before committing, the printer returns
+to stock by itself (next paragraph); a headless install stick left in does
+not start it again. A kernel whose SHA-256 matches `c5os`'s `good-kernel`
+skips the RAM test: the installer points the flag at it and reboots.
+
+**Test boots fail back to stock.** A test boot is a boot whose root is an
+eMMC slot the flag does not name, so stock chainloaded it (`slot.sh`
+`c5_test_boot`). Its flag stays on stock, and three things end it there
+without a power cycle:
+1. Kernel hang: `chainload.ko` arms the SoC watchdog right before the jump
+   (`C5CL_WDT`, default 120 s). The OpenWrt kernel keeps it fed
+   (`kernel/patches/0005`) until procd opens `/dev/watchdog`. A kernel that
+   hangs before that is reset after 120 s, a system that hangs later within
+   procd's 30-second timeout. The SPL then boots the flagged slot: stock.
+2. Unhealthy: `c5-booted` (START=99) finds `/data` not mounted and fails the
+   test at once (reason `c5os not mounted at /data`).
+3. Stuck: preinit starts a background job that waits `C5_TEST_DEADLINE`
+   seconds (default 180; a `C5_TEST_DEADLINE=N` word on the kernel command
+   line overrides it, the kernel passes it to init). If `c5-booted` has not
+   found the boot healthy by then, the job fails the test (reason
+   `not healthy within 180 s`). Both take the decision with
+   `mkdir /tmp/c5-test.decided`; the first one wins.
+
+Failing a test (`slot.sh` `c5_test_fail`) writes the flag to stock and reads
+it back, removes `pending-commit` and writes `last-test` on `c5os`, then
+runs `reboot -f`. It never writes the stock slot, `userdata` or the
+stock-invalid mark. Preinit does not count a test boot: the counter and the
+flag stay as they are. The watchdog part is not verified on hardware; with
+`C5CL_WDT=0` or a watchdog that does not work, a hung test kernel needs a
+power cycle, which also boots stock.
+
+**The outcome is recorded once on `c5os`.** `opencreator-os/last-test` holds
+one line:
+- `started VERSION`: written by the stock installer right before it boots
+  OpenWrt (after staging the chainload, or right after a known-good flip
+  wrote the flag). VERSION is the version `install.state` records for that
+  slot.
+- `ok VERSION`: `c5-booted` committed a `pending-commit`, or found `started`
+  and the flag names its slot. VERSION is the image's `DISTRIB_RELEASE`
+  (the build's `git describe`).
+- `failed VERSION REASON`: a failed test boot, or the counter fallback below.
+
+Whoever tells the user renames it to `last-test.seen`. Stock reports a
+`started` that is still there (the test kernel hung and the watchdog reset
+the printer, or it was power-cycled) or a `failed`; OpenWrt reports `ok`
+(`install.md`).
 
 **Three failed boots, then stock.**
 1. Early preinit (`05_c5_bootcount`) increments a counter in one `ota` sector
    at offset 192 KiB (`C5TRIES1 N`; empty or malformed data means zero).
    The first three attempts leave the flag alone. If those fail to become
-   healthy, the fourth attempt selects stock, resets the counter and reboots.
+   healthy, the fourth attempt selects stock, resets the counter, removes
+   `pending-commit` and records `last-test` as
+   `failed VERSION boot counter: 3 boots of slot N did not become healthy`
+   on `c5os`, and reboots. Test boots are not counted (above).
 2. Fallback is refused if stock is marked invalid or lacks a uImage kernel
    and squashfs root. OpenWrt stays selected; the boot log says `NO fallback`.
 3. At START=99, `c5-booted` treats `/data` being mounted as healthy. It resets
@@ -52,9 +97,12 @@ installer points the flag at it and reboots.
 
 The hardware watchdog is enabled in the kernel and fed by procd through
 `/dev/watchdog` (by default a requested 30-second timeout and a feed every
-5 seconds). No separate watchdog service is needed. It cannot promise a
-reboot for every failed service, and the counter cannot catch failures
-before preinit. These safety changes have not been verified on hardware.
+5 seconds). No separate watchdog service is needed. The SPL disables it on
+boot; on a test boot `chainload.ko` has armed it, and the kernel feeds it
+until procd takes over (`CONFIG_WATCHDOG_HANDLE_BOOT_ENABLED=y` and
+`kernel/patches/0005`). It cannot promise a reboot for every failed service,
+and the counter cannot catch failures before preinit. These safety changes
+have not been verified on hardware.
 
 A chainload test may commit only when its kernel is the root slot's own
 kernel. `c5-chainload.sh stage /dev/mmcblk0pN` compares the staged image with
@@ -62,8 +110,10 @@ the GPT `kernel`/`kernel2` partition paired with rootfs `pN` (`p2`→`p1`,
 `p4`→`p3`). The image must be exactly one uImage (64-byte header + `ih_size`)
 and byte-identical to the start of that partition. Otherwise, or for a
 non-slot root, the script adds `c5.nocommit=1`; `stage` and `args` print the
-decision. On such a boot both preinit and `c5-booted` leave the counter and
-flag alone and do not record a good kernel.
+decision. On such a boot both preinit and `c5-booted` leave the counter
+alone and do not record a good kernel; a healthy one leaves the flag alone
+too. A `c5.nocommit=1` boot of an eMMC slot is still a test boot and fails
+back to stock when it is not healthy.
 
 **Sysupgrade uses the known-good kernel record.** It writes the OpenWrt slot
 from RAM, never stock's slot. If the new kernel's SHA-256 matches
@@ -232,13 +282,40 @@ still uses its own action file and is unchanged.
 
 ## Failure cases
 
-### 1. Chainload test boot hangs or OpenWrt never answers
+### 1. Chainload test boot hangs, is unhealthy, or OpenWrt never answers
 
-If a changed-kernel test hangs before committing, the flag is still on
-stock: power-cycle into stock. Look at `opencreator-os/logs/` on `c5os`
-(mount it on stock as shown above) and the `ota` boot log. The test has
-already written the OpenWrt slot and, on first install, created `c5os`;
-it also writes the boot counter/log. Fix the image and reinstall.
+The flag is still on stock, and the test boot returns there by itself
+("Test boots fail back to stock" above):
+
+| What happens | What ends it | `last-test` reason |
+|---|---|---|
+| Kernel hangs before procd opened `/dev/watchdog` | watchdog reset after `C5CL_WDT` s (default 120) | none written; stock reports `hung before OpenWrt started (watchdog reset)` |
+| System hangs after procd opened it | procd's 30-second watchdog | as above |
+| `/data` (`c5os`) not mounted at START=99 | `c5-booted` at once | `c5os not mounted at /data` |
+| START=99 not reached within 180 s after preinit | the preinit deadline | `not healthy within 180 s` |
+
+With `C5CL_WDT=0`, or if the watchdog does not work (not verified on
+hardware), a hung kernel stays hung: power-cycle; stock boots, and is
+reported the same way as a watchdog reset. In the boot log a failed test
+shows as `test: FAILED: REASON; flag -> slot N (stock)` and
+`test: rebooting into stock`.
+
+The next run of the install stick on stock reports it once: with the app,
+the screen "OpenWrt test failed" with the reason and "Stock is unchanged and
+boots normally."; "Try again" goes on to the menu, "Boot to stock" lets stock
+boot. With or without the app it logs
+`test: the OpenWrt test boot (VERSION) failed: REASON; stock is unchanged`.
+A headless stick logs only that line, then does not repeat the test
+("OpenWrt already tried").
+
+What a failed test boot changed: the flag (rewritten to stock), the `ota`
+boot log (reset at every slot boot), `last-test` and the removed
+`pending-commit` on `c5os`, and the slot's own rootfs overlay. It does not
+write the boot counter, the stock-invalid mark, the stock slot or
+`userdata`; `c5os`'s `opencreator-os/logs/` still holds the last boot that
+completed `c5-booted`. Before the test, the install already wrote the
+OpenWrt slot and, on first install, created `c5os`. Read the `ota` boot log
+on stock as shown above, fix the image and reinstall.
 
 If OpenWrt merely never answers SSH, it may still have committed: networking
 is not a health gate. Check the flag/boot log before assuming a power cycle
@@ -249,10 +326,14 @@ returns to stock. Use the headless install stick's `swap` action if needed.
 `c5-booted` reports `booted: NOT healthy (/data not mounted)` or never
 runs. A normal boot leaves the flag on OpenWrt and does not reset the
 counter. After three failed attempts that reached preinit, the next
-attempt selects stock and reboots if stock is selectable. The watchdog
-may reset a hung system; otherwise power-cycle. A failure before preinit
-cannot be counted (case 7). A changed-kernel pending test with its flag
-still on stock returns there on the first power cycle.
+attempt selects stock and reboots if stock is selectable. That fallback
+records `last-test` as `failed VERSION boot counter: 3 boots of slot N did
+not become healthy` and removes `pending-commit`, so the next stock run of
+an install stick reports it like a failed test boot (case 1). This also
+covers a known-good flip whose boots fail. The watchdog may reset a hung
+system; otherwise power-cycle. A failure before preinit cannot be counted
+(case 7). A test boot (flag still on stock) is not counted; it returns to
+stock by itself (case 1).
 
 Wi-Fi or SSH failure alone no longer means unhealthy. Inspect the network
 separately; use `ACTION=swap` on the install stick if you need stock.
@@ -271,7 +352,7 @@ separately; use `ACTION=swap` on the install stick if you need stock.
   counter protecting subsequent boots; no chainload is needed.
 - Changed kernel: it boots stock; test-boot as described above. A healthy
   test boot commits the pending image. If the test fails before committing,
-  power-cycle into stock and install a working build.
+  it returns to stock by itself (case 1); install a working build.
 - `READ-BACK MISMATCH`: the OpenWrt slot may be damaged. A changed-kernel
   upgrade has its flag on stock; reinstall there. On the known-good path
   the flag remains on OpenWrt, so a write failure can instead require the
@@ -387,8 +468,8 @@ happens, reinstall opencreator-os from the new stock.
 
 `c5os` (`/data` on OpenWrt): if `/data` cannot mount, `c5-booted` reports
 not healthy and leaves the flag unchanged. A normal boot eventually falls
-back after three failures; a pending test with its flag on stock returns
-there on the next power cycle. With `/data` unavailable, the USB hook also
+back after three failures; a test boot with its flag on stock fails back
+there at once (case 1). With `/data` unavailable, the USB hook also
 lacks its stored model and skips the stick.
 
 If OpenWrt is reachable over SSH and p8 is unmounted, repair it with

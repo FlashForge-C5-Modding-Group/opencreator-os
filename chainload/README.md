@@ -4,7 +4,8 @@
 (5.10.186+). It loads a kernel image into RAM, shuts devices down with the
 kernel's own `kernel_restart_prepare()`, and jumps to the image the same way
 the U-Boot SPL does. Nothing on the eMMC is written and the boot flag is
-left alone, so if the new kernel hangs, a power cycle brings stock back
+left alone. Right before the jump it arms the SoC watchdog, so if the new
+kernel hangs, the printer resets (or is power-cycled) and the SPL boots stock
 exactly as before. The stock kernel has no kexec. opencreator-os uses this
 to test a kernel and rootfs (on a USB stick or in the spare eMMC slot)
 before the SPL ever boots it.
@@ -28,6 +29,17 @@ credits kiln-os. Our changes to `chainload_main.c`:
   Without this check, an image larger than 7 MiB would overwrite its own
   source during the copy. `MAX_IMAGE` (8 MiB, the SPL kernel slot size) is
   still the read limit.
+- New: right before the jump, after `kernel_restart_prepare()` and
+  `local_irq_disable()` and before the trampoline, the module arms the X2600
+  watchdog (WDT in TCU0 at 0x13630000, CPM at 0x10000000) the way the SDK's
+  5.10 reboot path does: reboot signature 0x3535 in `CPM_CPSPR`, TCU0 clock
+  ungated (`CLKGR1` bit 8), WDT clock stop bit cleared (`TSCR` bit 16),
+  compare value `wdt * rate / 1024` with prescaler 1024 and the RTC clock
+  that `CPM_OPCR` bit 2 selects (clear: EXTCLK/512 = 46875 Hz, set:
+  32768 Hz; `OPCR` is only read), then the counter enabled. The new module
+  parameter `wdt` is in seconds: default 120, 0 = off, at most 1431 (the
+  16-bit compare register at 46875 Hz). The staging and `go` messages print
+  it. The register access is inline; the imports are unchanged.
 
 `tramp.S` is unchanged. `Makefile`, `build.sh`, `c5-chainload.sh` and this
 README were written for opencreator-os; kiln-os's `Makefile`, `chainload.sh`
@@ -100,7 +112,7 @@ one directory, normally `/usr/data/opencreator-os/chainload/`. The installer
 puts them there.
 
 ```
-sh c5-chainload.sh args /dev/mmcblk0p2      # print cmdline, safe_max, krp, commit decision; changes nothing
+sh c5-chainload.sh args /dev/mmcblk0p2      # print cmdline, safe_max, krp, watchdog, commit decision; changes nothing
 sh c5-chainload.sh stage /dev/mmcblk0p2     # insmod + stage; harmless
 sh c5-chainload.sh status
 sh c5-chainload.sh unstage                  # or:
@@ -129,6 +141,10 @@ sh c5-chainload.sh go                       # no return; SSH drops
   `kptr_restrict` briefly.
 - Computes `safe_max` from `/proc/iomem`: the end of the first `System RAM`
   range below 256 MiB, minus 16 MiB, rounded down to 1 MiB.
+- Passes `wdt=` from `C5CL_WDT` (seconds from the jump until the watchdog
+  resets a hung kernel; default 120, 0 = off). Anything but a number from 0
+  to 1431 is refused. `args` prints it as `watchdog=`, `stage` and `status`
+  show it too.
 - Runs `insmod` and prints the module's `chainload:` dmesg lines.
 
 `go` runs detached, through `setsid`, `nohup` or a plain background job with
@@ -176,12 +192,25 @@ RAM at 0x00000000-0x0ebfffff (lowmem) and at 0x30000000-0x3fffffff
 
 ## Recovery
 
-Power cycle. Nothing on the eMMC or in the `ota` boot flag changes during
-`stage` or `go`, so the SPL boots the installed stock slot as before.
-Do not expect a hung test kernel to reset by itself: stock loads
-`soc_watchdog.ko`, but whether it is armed has not been checked on the
-Creator 5 Pro (on the AD5X it is not). `stage` alone changes nothing;
-`unstage` removes the module.
+Nothing on the eMMC or in the `ota` boot flag changes during `stage` or `go`,
+so any reset or power cycle boots the installed stock slot as before.
+`stage` alone changes nothing; `unstage` removes the module.
+
+A hung test kernel resets by itself: `go` arms the SoC watchdog for `wdt`
+seconds (`C5CL_WDT`, default 120; the `go` message names the value). If
+nothing feeds it, the SoC resets and the SPL boots the flagged (stock) slot.
+The SPL disables the watchdog on boot, so normal boots are unaffected. The
+opencreator-os kernel keeps a watchdog it finds running fed
+(`kernel/patches/0005`, with `CONFIG_WATCHDOG_HANDLE_BOOT_ENABLED=y` the
+watchdog core pings it every half timeout) until procd opens
+`/dev/watchdog` and feeds it itself. A kernel that does not feed a running
+watchdog is reset after `wdt` seconds even if it boots; stage such an image
+with `C5CL_WDT=0`. With `C5CL_WDT=0` nothing is armed and a hung kernel needs
+a power cycle. Once OpenWrt runs, it sends an unhealthy test boot back to
+stock itself (`docs/recovery.md`).
+
+Not verified on hardware: the register sequence follows the SDK sources, and
+QEMU has no X2600 watchdog.
 
 ## Risks
 

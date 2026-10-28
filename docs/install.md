@@ -74,7 +74,11 @@ detected pair.
    with "Nothing was written". If stock's data would not fit the shrunk
    `userdata`, a screen "Please free N MB on /usr/data" offers only "Boot to
    stock": tap it, delete files from `/usr/data` (stock UI or SSH), then
-   reboot with the stick.
+   reboot with the stick. If the last test boot of OpenWrt failed, the next
+   screen says so once: "OpenWrt test failed", the reason (e.g. "hung before
+   OpenWrt started (watchdog reset)") and "Stock is unchanged and boots
+   normally." "Try again" goes on to the menu; "Boot to stock" ends the
+   installer and stock boots on.
 2. **Menu.** "Install / update opencreator-os", "Swap to OpenWrt" or "Swap to
    stock" (disabled while OpenWrt is not installed), and "Uninstall"
    (disabled, not yet available).
@@ -102,6 +106,8 @@ detected pair.
       reboots. Otherwise it writes `pending-commit` on `c5os` and test-boots
       that OpenWrt from RAM (`chainload.ko`), "Test-booting OpenWrt from
       RAM": the boot flag stays on stock until the healthy boot commits it.
+      The screen may go blank; if OpenWrt does not come up, the printer
+      returns to stock by itself within about 4 minutes.
 4. **Swap.** From stock with OpenWrt installed: the same rule as step 5, for
    the kernel in OpenWrt's slot: a known-good kernel gets the boot flag and a
    reboot, any other a RAM test boot (with `pending-commit` written if
@@ -115,12 +121,34 @@ gate. With its own slot's kernel and a matching `pending-commit`, the health
 service points the flag at OpenWrt and removes the marker. Normal healthy
 boots only reset the failed-boot counter and record `good-kernel`.
 
+A test boot does not count as a failed boot. It must be healthy within
+180 s after preinit; otherwise, or at once when `/data` is not mounted,
+OpenWrt points the flag back at stock and reboots. A kernel that hangs
+earlier is reset by the watchdog `chainload.ko` armed for the jump (120 s).
+Either way stock boots, unchanged; `recovery.md` case 1 lists what is left
+behind.
+
+How the boot went is reported once, from `c5os`'s
+`opencreator-os/last-test` (`recovery.md`). A failure is reported by the next
+stock run of the stick (screen above, and the log line
+`test: the OpenWrt test boot (VERSION) failed: REASON; stock is unchanged`);
+a power cycle during the test is reported as a watchdog reset. Success is
+reported by OpenWrt when the stick is still in after the test boot or flip:
+the USB hook waits until the health service has decided, then the installer
+shows "OpenWrt installed": "The test boot succeeded and OpenWrt is now the
+boot system. Remove the USB stick, then tap Reboot." "Reboot" boots OpenWrt
+again (the flag already names it); with the stick still in, that boot shows
+the normal OpenWrt menu. Without a working display only the log line
+`test: OpenWrt VERSION installed: the test boot succeeded and slot N is the boot system (no display)`
+is written and OpenWrt keeps running. The report is then renamed to
+`last-test.seen`. `--check` only logs the report.
+
 SSH in as `root`, password `FlashForge2026`; **no key is needed**.
 `authorized_keys` on the stick is optional. The model sets the initial
 hostname to `creator5` or `creator5pro` (missing model defaults to
 `creator5pro`).
 
-If a test boot fails before it commits, power-cycle: stock boots.
+A failed test boot returns to stock by itself; power-cycling also boots stock.
 Lack of Wi-Fi alone does not prevent a commit. The installer logs to
 `opencreator-os-install.log` on the stick and to
 `/usr/data/opencreator-os/install.log` under stock; the app logs to
@@ -129,8 +157,9 @@ Lack of Wi-Fi alone does not prevent a commit. The installer logs to
 A headless stick that stays in does not loop: once it has started OpenWrt
 (flipped the flag or begun a test boot; recorded per payload in
 `/usr/data/opencreator-os/install.state`), a later headless run of the same
-stick on stock ends with "OpenWrt already tried" and stock boots on. With
-the app, Install and Swap may always be retried.
+stick on stock logs a failed test (if any), ends with "OpenWrt already
+tried" and stock boots on. With the app, Install and Swap may always be
+retried.
 
 ### Headless stick
 
@@ -161,6 +190,13 @@ read-write at `/mnt`, runs its `runFirmwareExe.sh` with the model stored in
 `/data/opencreator-os/model`, and unmounts it when the hook returns.
 Missing or invalid stored model means no hook; see `logread -e c5-usb-hook`.
 For now omit `--app` when building a stick for headless OpenWrt use.
+
+While the outcome of an installer test boot is open (a test boot, or
+`last-test` still `started` after a flip), the hook does not run at
+START=19. It logs `test boot outcome pending; USB hook deferred until
+c5-booted`, and `c5-booted` runs it once it has decided, so the installer
+sees the committed result and first reports it ("OpenWrt installed",
+above).
 
 The backend offers these actions (menu labels apply when a display works):
 
@@ -215,16 +251,19 @@ Normal OpenWrt boots leave the boot flag on OpenWrt. Early preinit increments
 a counter in `ota`; after three consecutive failed boots that reached
 preinit, the next attempt selects stock and reboots, provided stock is
 selectable. Healthy boots (START=99 with `/data` mounted) reset the counter.
-A kernel that dies before preinit cannot advance it. The built-in hardware
-watchdog is fed by procd through `/dev/watchdog`; no extra watchdog daemon
-is used. These safety changes are not hardware-verified.
+A kernel that dies before preinit cannot advance it. Test boots chainloaded
+from stock are not counted; they fail back to stock themselves (section 2).
+The built-in hardware watchdog is fed by procd through `/dev/watchdog`; no
+extra watchdog daemon is used. These safety changes are not
+hardware-verified.
 
 The fixed `/etc/config/fstab` mounts ext4 label `c5os` at `/data` with
 `rw,noatime`, with no `userdata` fallback. `/data/opencreator-os/` holds
 `model`, `wifi.conf`, optional `authorized_keys`, `good-kernel`,
-`pending-commit`, `sysupgrade.tgz` and `logs/`. Preinit imports settings
-only from `c5os` into `/etc/c5/` and `/etc/dropbear/` if the destination is
-not already populated. It also stages the saved sysupgrade configuration,
+`pending-commit`, `last-test` (or `last-test.seen`), `sysupgrade.tgz` and
+`logs/`. Preinit imports settings only from `c5os` into `/etc/c5/` and
+`/etc/dropbear/` if the destination is not already populated. It also
+stages the saved sysupgrade configuration,
 which includes `/etc/c5/` (`/lib/upgrade/keep.d/c5`), so a `wifi.conf`
 edited on OpenWrt survives a sysupgrade.
 OpenWrt mounts `userdata` only briefly to repair stock or stage a changed

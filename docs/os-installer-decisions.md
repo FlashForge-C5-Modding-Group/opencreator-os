@@ -86,6 +86,21 @@ Not a spec. Labels: **Observed** (seen on the printer or in a stock file),
   a chainload test boot that commits via `pending-commit`. The former
   `FLIP`/`CHAINLOAD` stick options are gone. A headless hook run does not
   repeat this for the same stick payload, so a stick left in cannot loop.
+- **Decided:** a failed test boot returns to stock without a power cycle.
+  `chainload.ko` arms the SoC watchdog for the jump (default 120 s,
+  `C5CL_WDT`) and the OpenWrt kernel keeps it fed until procd opens it
+  (`kernel/patches/0005`). OpenWrt fails a test boot back to stock at once
+  when `/data` is not mounted at START=99, or when it is not healthy 180 s
+  after preinit; test boots do not count toward the three failed boots. It
+  never writes the stock slot, `userdata` or the stock-invalid mark. The
+  watchdog path is not verified on hardware.
+- **Decided:** the outcome of the boot the installer started (test boot or
+  flip) is recorded in `c5os` `opencreator-os/last-test` and reported once.
+  A failure, or a hang (`started` still there), is reported by the next stock
+  run: "OpenWrt test failed" with the reason, "Try again" (menu) or "Boot to
+  stock". Success is reported by OpenWrt's run of the stick, which the USB
+  hook defers until `c5-booted` has decided: "OpenWrt installed" with one
+  "Reboot" button; headless only a log line.
 
 ## Open questions for the design
 
