@@ -8,6 +8,7 @@
 #   STOCK_ROOTFS_PATH  path of the extracted stock 2.0.0 rootfs inside it
 #   KVER           mainline Linux version for the QEMU kernel
 #   QEMU_CPU       QEMU CPU model (must run stock NaN2008 glibc and OpenWrt musl)
+#   QEMU_AIO       QEMU drive aio= backend (io_uring; threads if QEMU lacks it)
 #   CROSS_COMPILE  toolchain prefix for the QEMU kernel
 
 QREPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
@@ -43,6 +44,7 @@ KSHA256=${KSHA256:-e7df81e588d70fab5ec3ec3bb04ac53d51f0860fc3b1ec45e0a4167a02689
 # kernel (squashfs "decompression failed", even uncompressed images fault).
 QEMU_CPU=${QEMU_CPU:-24Kf}
 QEMU_MEM=${QEMU_MEM:-256}
+QEMU_AIO=${QEMU_AIO:-io_uring}
 # The product kernel's built-in command-line prefix (CONFIG_CMDLINE in
 # kernel/creator5pro.config, put in front of the SPL's argv); the QEMU
 # kernel has none, so the harness passes it.

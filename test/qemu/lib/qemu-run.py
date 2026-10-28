@@ -124,16 +124,15 @@ class Console:
         # console. OpenWrt's busybox has no stty, so the tty still echoes
         # input; run() markers are built so that echoed lines never match.
         # Input typed ahead of the exec would be swallowed by ash's line
-        # editor and lost, so ping until the new channel answers.
+        # editor and lost, so ping until the new channel answers. The channel
+        # runs its input in order: answers to earlier pings all come before
+        # the output of any later command.
         # (busybox cat holds tty input back - it copies with sendfile - so a
         # shell read loop feeds the pipe line by line)
         self.send("dmesg -n 1; exec sh -c 'while IFS= read -r l; do printf \"%s\\n\" \"$l\"; done | sh 2>&1'\n")
-        for _ in range(30):
-            time.sleep(1)
+        for _ in range(60):
             self.send("echo __SHELL_READY__\n")
-            if self.expect(r"^__SHELL_READY__$", 2):
-                # drain answers to earlier pings
-                self.expect(r"(?!)", 1)
+            if self.expect(r"^__SHELL_READY__$", 0.5):
                 return None
         return "command channel did not come up"
 

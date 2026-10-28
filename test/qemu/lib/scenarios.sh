@@ -24,7 +24,7 @@ steps_openwrt() {
 	{
 		cat <<'EOF'
 shell 400
-run 600 waitboot i=0; until dmesg | grep -qE 'c5: booted: (slot [12] healthy|chainloaded kernel|NOT healthy|root )'; do i=$((i+1)); [ $i -lt 300 ] || exit 1; sleep 2; done; dmesg | grep 'c5: '
+run 600 waitboot i=0; until dmesg | grep -qE 'c5: booted: (slot [12] healthy|chainloaded kernel|NOT healthy|root )'; do i=$((i+1)); [ $i -lt 600 ] || exit 1; sleep 1; done; dmesg | grep 'c5: '
 run 30 uname uname -r
 run 30 cmdline cat /proc/cmdline
 run 30 mounts cat /proc/mounts
@@ -176,7 +176,7 @@ run 30 hostname uci -q get system.@system[0].hostname
 run 30 logs ls /data/opencreator-os/logs/
 run 30 overlay mount | grep -E ' on /overlay | on / '
 run 30 deadline ps w | grep '[c]5_test_deadline'
-run 300 hook i=0; until [ -f /data/opencreator-os/last-test.seen ]; do i=$((i+1)); [ $i -lt 150 ] || exit 1; sleep 2; done; cat /data/opencreator-os/last-test.seen; logread | grep -E 'c5-usb-hook|test: '
+run 300 hook i=0; until [ -f /data/opencreator-os/last-test.seen ]; do i=$((i+1)); [ $i -lt 300 ] || exit 1; sleep 1; done; cat /data/opencreator-os/last-test.seen; logread | grep -E 'c5-usb-hook|test: '
 EOF
 	boot s2-openwrt "$DISK" "$(chainload_cmdline s2-stock)" "$st" "$RUN/stick-s2-stock.img"
 	check "OpenWrt shell reached and c5-booted ran" res_has s2-openwrt waitboot 'c5: booted:'
@@ -330,7 +330,7 @@ scenario_S5() {
 	st=$RUN/s5-direct.steps
 	cat > "$st" <<'EOF'
 shell 400
-run 600 waitboot i=0; until dmesg | grep -q 'c5: booted:'; do i=$((i+1)); [ $i -lt 300 ] || break; sleep 2; done
+run 600 waitboot i=0; until dmesg | grep -q 'c5: booted:'; do i=$((i+1)); [ $i -lt 600 ] || break; sleep 1; done
 run 60 copy cp /data/qemu/v2.tar /tmp/v2.tar && sysupgrade -T /tmp/v2.tar
 send sysupgrade -v /tmp/v2.tar
 wait-exit 900
@@ -359,7 +359,7 @@ EOF
 	st=$RUN/s5-a.steps
 	cat > "$st" <<'EOF'
 shell 400
-run 600 waitboot i=0; until dmesg | grep -q 'c5: booted:'; do i=$((i+1)); [ $i -lt 300 ] || break; sleep 2; done; dmesg | grep 'c5: '
+run 600 waitboot i=0; until dmesg | grep -q 'c5: booted:'; do i=$((i+1)); [ $i -lt 600 ] || break; sleep 1; done; dmesg | grep 'c5: '
 run 30 board cat /tmp/sysinfo/board_name
 run 30 hostname uci set system.@system[0].hostname=c5test && uci commit system && uci get system.@system[0].hostname
 run 30 wifi printf "SSID='S5 Edited'\nPSK='s5-edited-123'\n" > /etc/c5/wifi.conf && cat /etc/c5/wifi.conf
@@ -418,7 +418,7 @@ EOF
 	st=$RUN/s5-cut.steps
 	cat > "$st" <<'EOF'
 shell 400
-run 600 waitboot i=0; until dmesg | grep -q 'c5: booted:'; do i=$((i+1)); [ $i -lt 300 ] || break; sleep 2; done; dmesg | grep 'c5: '
+run 600 waitboot i=0; until dmesg | grep -q 'c5: booted:'; do i=$((i+1)); [ $i -lt 600 ] || break; sleep 1; done; dmesg | grep 'c5: '
 run 60 copy cp /data/qemu/v2.tar /tmp/v2.tar
 send sysupgrade -v /tmp/v2.tar
 kill-when 600 Writing rootfs
@@ -511,9 +511,9 @@ EOF
 	make_ui_payload "$RUN/payload-s6-ui" "menu_main=3 confirm_repair-stock=cancel hold=main" || { fatal "make-install-stick.sh failed"; return 0; }
 	make_stick "$RUN/payload-s6-ui" "$RUN/stick-s6-ui.img"
 	steps_openwrt "$RUN/s6-ui-cancel.steps" <<'EOF'
-run 120 held i=0; until [ -f /tmp/qemu-ui-held ]; do i=$((i+1)); [ $i -lt 60 ] || exit 1; sleep 2; done; [ ! -f /tmp/qemu-ui-release ] && pidof dropbear && ifstatus lan | grep '"up": true'
+run 120 held i=0; until [ -f /tmp/qemu-ui-held ]; do i=$((i+1)); [ $i -lt 120 ] || exit 1; sleep 1; done; [ ! -f /tmp/qemu-ui-release ] && pidof dropbear && ifstatus lan | grep '"up": true'
 run 30 release touch /tmp/qemu-ui-release
-run 120 hookdone i=0; while grep -q ' /mnt ' /proc/mounts; do i=$((i+1)); [ $i -lt 60 ] || exit 1; sleep 2; done
+run 120 hookdone i=0; while grep -q ' /mnt ' /proc/mounts; do i=$((i+1)); [ $i -lt 120 ] || exit 1; sleep 1; done
 EOF
 	boot s6-ui-cancel "$DISK" "$(spl_root "$DISK")" "$RUN/s6-ui-cancel.steps" "$RUN/stick-s6-ui.img"
 	check "app: c5-booted, dropbear and lan up while the menu waits for a tap" res_ok s6-ui-cancel held

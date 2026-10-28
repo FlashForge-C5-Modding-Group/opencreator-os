@@ -393,14 +393,17 @@ boot() {
 	esac
 	# User-mode networking provides the normal LAN/DHCP environment; boot
 	# health itself depends only on reaching c5-booted with c5os mounted.
+	# QEMU's sd-card reads and writes the image one 512-byte block at a time,
+	# synchronously; io_uring makes each of those about twice as fast as the
+	# default thread pool (S12's whole-eMMC backup is bound by it).
 	q=(qemu-system-mipsel -M malta -cpu "$QEMU_CPU" -m "$QEMU_MEM" -kernel "$VMLINUX"
 		-append "$cl"
 		-display none -monitor none -serial stdio -no-reboot
 		-nic user,model=pcnet,restrict=on
-		-drive "if=none,id=emmc,file=$disk,format=raw"
+		-drive "if=none,id=emmc,file=$disk,format=raw,aio=$QEMU_AIO"
 		-device sdhci-pci -device sd-card,drive=emmc)
 	# the stick sits on xHCI: UHCI's ~1 MB/s is too slow for S12's backup
-	[ -n "$stick" ] && q+=(-drive "if=none,id=stick,file=$stick,format=raw"
+	[ -n "$stick" ] && q+=(-drive "if=none,id=stick,file=$stick,format=raw,aio=$QEMU_AIO"
 		-device qemu-xhci,id=xhci -device usb-storage,bus=xhci.0,drive=stick)
 	say "boot $BOOTN '$name': $(echo "$cl" | grep -o 'root=[^ ]*')$(echo " $cl" | grep -o ' c5\.[^ ]*' | tr -d '\n') flag='$(img_flag "$disk")'${stick:+ stick=${stick##*/}}"
 	: > "$RUN/$name.res"
