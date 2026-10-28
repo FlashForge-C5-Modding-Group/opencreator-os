@@ -68,7 +68,7 @@ describe`), and runs `make`. Options: `--menuconfig`, `--kernel-menuconfig`,
   `module_drivers/dts/Makefile`). It includes `x2600.dtsi`, the same as the
   SDK's `x2600_module_base_mmc0.dts`.
 - Command line: `CONFIG_MIPS_CMDLINE_BUILTIN_EXTEND` puts
-  `CONFIG_CMDLINE="ieee754=relaxed console=ttyS0,115200n8 console=tty0 fbcon=rotate:3"`
+  `CONFIG_CMDLINE="ieee754=relaxed console=ttyS0,115200n8 console=tty0 fbcon=rotate:3 vt.global_cursor_default=0"`
   in front of the SPL's argv (copied into `arcs_cmdline` by
   `arch/mips/xburst2/core/prom.c`; `bootcmdline_init()` in
   `arch/mips/kernel/setup.c` copies the built-in string first, then appends
@@ -88,10 +88,17 @@ describe`), and runs `make`. Options: `--menuconfig`, `--kernel-menuconfig`,
   takes the first `console=` word for its shutdown output, and `askconsole`
   uses `/dev/console` (ttyS0) when there are several. No login runs on tty0.
   `loglevel=8` comes from the SPL after the prefix and stays: the panel
-  shows everything serial shows. `CONFIG_VT_HW_CONSOLE_BINDING` lets the
-  stick's `runFirmwareExe.sh` unbind fbcon (`/sys/class/vtconsole/vtconN/bind`)
-  while the os-installer app draws and bind it again afterwards. Not yet
-  seen on hardware.
+  shows everything serial shows. `vt.global_cursor_default=0` hides the VT
+  cursor, so no blinking `_` sits under the log. fbcon scrolls by redrawing
+  (`SCROLL_REDRAW`, fixed without
+  `CONFIG_FRAMEBUFFER_CONSOLE_LEGACY_ACCELERATION`); it never pans the
+  framebuffer, and with `rotate:3` it could not anyway, since a console
+  scroll would be an X pan, which the driver rejects (`xpanstep` 0).
+  `CONFIG_VT_HW_CONSOLE_BINDING` lets the stick's `runFirmwareExe.sh`
+  unbind fbcon (`/sys/class/vtconsole/vtconN/bind`) while the os-installer
+  app draws and bind it again afterwards. On the printer the console text
+  comes out the right way up and at the right size, but the whole picture
+  is shifted in a circle (scanout, not fbcon; under investigation).
 - `make zImage` produces `arch/mips/boot/compressed/zImage` (self-extracting,
   linked at `0x80f00000`); OpenWrt picks it up through `IMAGES_DIR:=compressed`
   and wraps it with `mkimage` into a legacy uImage, load = entry =
