@@ -221,7 +221,7 @@ platform_do_upgrade() {
 	else
 		v "ERROR: slot $own is written, but chainload/kernel.uimage (userdata) and pending-commit (c5os) could not be stored: $C5_SU_PART failed."
 		v "The next boot is stock (slot $other). The new image cannot be test-booted with the saved kernel;"
-		v "reinstall it from stock with an install stick (tools/make-install-stick.sh --chainload)."
+		v "reinstall it from stock with an install stick."
 		c5_bootlog "sysupgrade: slot $own written, but storing the chainload kernel / pending-commit FAILED"
 		return 1
 	fi
@@ -230,7 +230,7 @@ platform_do_upgrade() {
 	v "Test-boot the new image from stock before it becomes the default:"
 	v "  over SSH on stock: sh /usr/data/opencreator-os/chainload/c5-chainload.sh stage $rdev"
 	v "                     sh /usr/data/opencreator-os/chainload/c5-chainload.sh go"
-	v "  or a USB stick made with tools/make-install-stick.sh --chainload"
+	v "  or Swap to OpenWrt from an install stick on stock"
 	v "The first healthy boot of slot $own commits it (c5-booted points the flag at it)."
 	return 0
 }

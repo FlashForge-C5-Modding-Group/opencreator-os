@@ -91,7 +91,7 @@ die() {
 #   PROGRESS N TOTAL                progress bar under the current INFO
 #   CONFIRM ID DELAY TEXT|OK|CANCEL OK enabled DELAY seconds after arrival
 #   MENU ID TEXT|ITEM|ITEM...       "-ITEM" is shown disabled
-#   BLOCK ID TEXT                   no buttons; the user power-cycles
+#   BLOCK ID TEXT|BUTTON            BUTTON exits the app with status 1
 # The app answers "ANSWER ID ok|cancel|N" on stdin; EOF means cancel. Every
 # other output line (log lines) only lands in the app's log viewer.
 
@@ -104,15 +104,15 @@ ui_info() {  # ui_info ID TEXT
 
 ui_progress() { ui_emit "PROGRESS $1 $2"; }
 
-# ui_block ID TEXT: show TEXT without buttons and stop. With the app the
-# installer waits for it to go away (the user power-cycles); exit 1 lets
-# the stock hook boot on.
+# ui_block ID TEXT BUTTON: show TEXT and stop. With the app the installer
+# waits until BUTTON is tapped (the app exits 1 and closes stdin); exit 1
+# lets the stock hook boot on.
 ui_block() {
 	if [ "${CHECK:-0}" = 1 ]; then
 		log "check: would block at $1: $2"
 		exit 1
 	fi
-	ui_emit "BLOCK $1 $2"
+	ui_emit "BLOCK $1 $2|$3"
 	log "install: BLOCKED at $1: $2"
 	sync
 	[ "$UI" = 1 ] && cat > /dev/null
@@ -208,6 +208,15 @@ squashfs_bytes() {
 	sb_n=$(hexdump -s 40 -n 4 -e '1/4 "%u"' "$1" 2>/dev/null)
 	case "$sb_n" in '' | *[!0-9]*) return 1 ;; esac
 	echo "$sb_n"
+}
+
+# uimage_bytes DEV -> length of the uImage at the start of DEV (64-byte
+# header plus the big-endian ih_size at offset 12)
+uimage_bytes() {
+	[ "$(c5_magic_hex "$1")" = "$UIMAGE_MAGIC" ] || return 1
+	ub_h=$(hexdump -s 12 -n 4 -e '4/1 "%02x"' "$1" 2>/dev/null)
+	[ "${#ub_h}" = 8 ] || return 1
+	echo $((0x$ub_h + 64))
 }
 
 # sum_init: pick sha256sum + SHA256SUMS, or md5sum + MD5SUMS when stock lacks it

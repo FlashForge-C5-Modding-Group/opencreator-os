@@ -4,12 +4,14 @@
 # WSL + WSLg; needs sudo (loop device, mounts; the app runs the installer
 # through "sudo -n").
 #
-#   tools/ui-demo.sh [--fresh] [--chainload] APP VERSION_DIR
+#   tools/ui-demo.sh [--fresh] APP VERSION_DIR
 #
 # APP          os-installer/build/sdl/os-installer
 # VERSION_DIR  OpenWrt build output (as for tools/make-install-stick.sh)
 # --fresh      start again from a stock-layout eMMC image and an empty stick
-# --chainload  install stick with CHAINLOAD (the jump is simulated)
+#
+# The jump into OpenWrt at the end of Install / Swap is simulated
+# (tools/demo/c5-chainload.sh).
 #
 # State in DEMO (default ~/build/opencreator-os/demo): disk.img (15,307,776
 # sectors, sparse), stick/ (the stick root, keeps emmc-backup/ between runs),
@@ -17,12 +19,11 @@
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
-FRESH=0 STICKOPTS=()
+FRESH=0
 usage() { sed -n '2,19s/^# \{0,1\}//p' "$0"; }
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--fresh) FRESH=1 ;;
-	--chainload) STICKOPTS+=(--chainload) ;;
 	-h | --help) usage; exit 0 ;;
 	-*) echo "ui-demo: unknown option $1" >&2; exit 2 ;;
 	*) break ;;
@@ -49,7 +50,7 @@ fi
 
 # stick: a fresh payload over the kept stick directory (emmc-backup stays)
 rm -rf "$DEMO/payload"
-"$REPO/tools/make-install-stick.sh" "${STICKOPTS[@]}" "$VDIR" "$DEMO/payload" > "$DEMO/make-install-stick.log"
+"$REPO/tools/make-install-stick.sh" "$VDIR" "$DEMO/payload" > "$DEMO/make-install-stick.log"
 install -m 0755 "$REPO/tools/demo/c5-chainload.sh" "$DEMO/payload/chainload/c5-chainload.sh"
 resum "$DEMO/payload"
 sudo mkdir -p "$DEMO/stick"
