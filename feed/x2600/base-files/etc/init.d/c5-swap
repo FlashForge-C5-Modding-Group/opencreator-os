@@ -2,17 +2,14 @@
 # shellcheck disable=SC1091,SC3043,SC2034  # STOP/EXTRA_* are read by /etc/rc.common
 #
 # Swap file /data/swapfile (256 MiB) on c5os. fstab's 'config swap' section
-# turns it on as soon as block mounts /data. sysupgrade restores the saved
-# /etc/config/fstab, so an install upgraded from an image without that
-# section never gets it: create also turns an existing file on.
+# turns it on as soon as block mounts /data.
 #
-# create: run by c5-booted after the health decision on every boot. Turns
-# the file on if it exists and is off; otherwise writes it once, when it is
-# missing on a mounted c5os; skipped (one syslog line) when /data is not
-# c5os or c5os would keep less than 64 MiB free. dd writes real zeros
-# (swapon refuses files with holes) into swapfile.new; only a finished file
-# gets the final name, so a power cut leaves swapfile.new for the next boot
-# to redo. Never fails.
+# create: run by c5-booted after the health decision on every boot. Writes
+# the file once, when it is missing on a mounted c5os, and turns it on;
+# skipped (one syslog line) when /data is not c5os or c5os would keep less
+# than 64 MiB free. dd writes real zeros (swapon refuses files with holes)
+# into swapfile.new; only a finished file gets the final name, so a power
+# cut leaves swapfile.new for the next boot to redo. Never fails.
 #
 # start/stop turn it on/off. stop also runs at shutdown (K89, before
 # K90umount): an active swap file keeps c5os from unmounting, which leaves
@@ -20,7 +17,7 @@
 
 STOP=89
 EXTRA_COMMANDS=create
-EXTRA_HELP="	create	Turn on the swap file, creating it first if it is missing"
+EXTRA_HELP="	create	Create the swap file if it is missing and turn it on"
 
 C5_SWAP_MIB=256
 C5_SWAP_SPARE_MIB=64
@@ -28,11 +25,7 @@ C5_SWAP_SPARE_MIB=64
 create() {
 	. /lib/c5/slot.sh
 	local f="$C5_DATA/swapfile" dev kib need
-	if [ -e "$f" ]; then
-		grep -q "^$f[[:space:]]" /proc/swaps || swapon "$f" 2>/dev/null ||
-			logger -t c5-swap "swapon $f FAILED"
-		return 0
-	fi
+	[ ! -e "$f" ] || return 0
 	if ! dev=$(c5_part_dev c5os) ||
 		! awk -v d="$dev" -v m="$C5_DATA" '$1 == d && $2 == m { f = 1 } END { exit !f }' "$C5_MOUNTS"; then
 		logger -t c5-swap "no swap file: $C5_DATA is not c5os"

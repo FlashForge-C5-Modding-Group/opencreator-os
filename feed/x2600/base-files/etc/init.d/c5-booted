@@ -6,7 +6,7 @@
 # boot (chainloaded from stock) that is not healthy fails back to stock at
 # once (c5_test_fail); a healthy one stops its preinit deadline. A committed
 # install records last-test "ok", then the USB hook it deferred runs. Last,
-# 'c5-swap create' turns on the c5os swap file, creating it if it is missing.
+# 'c5-swap create' creates the c5os swap file if it is missing.
 
 START=99
 

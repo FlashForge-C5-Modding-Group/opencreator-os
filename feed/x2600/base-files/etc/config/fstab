@@ -13,8 +13,8 @@ config mount 'data'
 	option options 'rw,noatime'
 	option enabled '1'
 
-# Created on c5os by '/etc/init.d/c5-swap create' (run from c5-booted, which
-# also turns it on if it is off); block turns it on whenever it mounts /data.
+# Created on c5os by '/etc/init.d/c5-swap create' (run from c5-booted); block
+# turns it on whenever it mounts /data.
 config swap
 	option device '/data/swapfile'
 	option enabled '1'

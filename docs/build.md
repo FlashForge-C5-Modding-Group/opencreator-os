@@ -191,3 +191,9 @@ Packages come from `DEFAULT_PACKAGES` in `feed/x2600/Makefile` (plus
   registers as `usb0` (a CDC device with a locally administered MAC, such as
   a phone) is not configured.
 - Camera: `kmod-video-uvc` for the internal UVC camera (`05a3:9230`).
+
+## Base files
+
+Files that sysupgrade preserves (such as `/etc/config/fstab`) get no
+migration code: a change to one reaches an existing install only through a
+fresh install from the USB stick.

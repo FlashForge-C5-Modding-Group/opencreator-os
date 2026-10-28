@@ -281,11 +281,11 @@ kernel for stock's `c5-chainload.sh`.
 `/data/swapfile` is a 256 MiB swap file (mode 600). After the health
 decision on the first boot that finds it missing, `c5-booted` runs
 `/etc/init.d/c5-swap create`, which writes it with `dd` (no holes), runs
-`mkswap` and turns it on; later boots turn it on through the fixed fstab's
-`config swap` section when `block` mounts `/data`, and `c5-swap create`
-turns it on if it is still off (sysupgrade restores the saved fstab, so an
-install upgraded from an image without that section lacks it). It is not
-created when `/data` is not `c5os` or when `c5os` would keep less than
+`mkswap` and turns it on; later boots turn it on only through the fixed
+fstab's `config swap` section when `block` mounts `/data`. An install
+upgraded with sysupgrade from an image whose fstab had no such section keeps
+its old fstab and gets no swap; install from the USB stick to get it. It is
+not created when `/data` is not `c5os` or when `c5os` would keep less than
 64 MiB free (`logread -e c5-swap` says why). Swappiness stays at the kernel
 default (60). The file lives on `c5os`, not in the overlay, so sysupgrade
 keeps it.
