@@ -93,8 +93,18 @@ flow_install() { # NAME [make-install-stick options]
 
 # OpenWrt installed with a default stick (first install: chainload test) and
 # committed by its first (chainloaded) boot. Cached per run in
-# $RUNROOT/committed.img.
+# $RUNROOT/committed.img (S2 leaves its image there). Parallel scenarios
+# take a lock: one builds the image, the others wait and copy it.
 prepare_committed() {
+	local lk rc
+	exec {lk}> "$RUNROOT/committed.lock"
+	flock "$lk"
+	prepare_committed_locked
+	rc=$?
+	exec {lk}>&-
+	return "$rc"
+}
+prepare_committed_locked() {
 	local c=$RUNROOT/committed.img st
 	if [ -s "$c" ]; then
 		cp --sparse=always "$c" "$DISK"
@@ -204,8 +214,9 @@ EOF
 	check "overlay (rootfs_data) is ext4 after the squashfs on p2" overlay_is_ext4 "$DISK" 2
 	check "wifi.conf persisted in the overlay upper dir" bash -c "debugfs -R 'cat /upper/etc/c5/wifi.conf' '$(overlay_spec "$DISK" 2)' 2>/dev/null | grep -q '^SSID='"
 	check "logs written to c5os opencreator-os/logs" bash -c "for f in dmesg-last.txt logread-last.txt bootlog-last.txt; do debugfs -R \"stat /opencreator-os/logs/\$f\" '$(c5os_spec "$DISK")' 2>/dev/null | grep -q '^Inode:' || exit 1; done"
+	# run.sh starts the scenarios that use prepare_committed after S2
 	if [ "$FAILS" = 0 ] && [ ! -s "$RUNROOT/committed.img" ]; then
-		cp --sparse=always "$DISK" "$RUNROOT/committed.img"
+		cp --sparse=always "$DISK" "$RUNROOT/committed.img.s2" && mv "$RUNROOT/committed.img.s2" "$RUNROOT/committed.img"
 	fi
 }
 
@@ -792,7 +803,8 @@ EOF
 		stick_cat "$stick" opencreator-os-install.log | tr -d '\r' > "$RUN/s13-$c-install.log"
 		check "$c: backup skipped by the user" grep -q 'backup: skipped by the user' "$RUN/s13-$c-install.log"
 		if [ "$c" = early ]; then
-			check "early: ok before the delay rejected" grep -q 'confirm c5os: ok arrived after 0s, before the 5 s delay; treating as cancel' "$RUN/s13-$c-install.log"
+			# the fake app answers at once; whole seconds can still read 1 s
+			check "early: ok before the delay rejected" grep -qE 'confirm c5os: ok arrived after [0-4]s, before the 5 s delay; treating as cancel' "$RUN/s13-$c-install.log"
 		fi
 		check "$c: aborted at c5os" grep -q 'abort: cancelled at c5os' "$RUN/s13-$c-install.log"
 		check "$c: GPT unchanged" is_eq "$(gpt_layout "$DISK")" "$base_gpt"
@@ -940,3 +952,6 @@ scenario_S15() {
 }
 
 ALL_SCENARIOS="S1 S2 S3 S4 S5 S6 S7 S8 S9 S10 S12 S13 S14 S15"
+# the scenario whose image prepare_committed reuses (run.sh -j starts the
+# scenarios that call prepare_committed after it)
+COMMITTED_BY=S2

@@ -15,8 +15,14 @@ export QEMU_ROOT_PASSWORD
 
 # ---------------------------------------------------------------- logging --
 
-# Per-scenario state: RUN (directory), FAILS (failed checks), BOOTN (boots)
-say() { echo "[$(date +%T)] $*" | tee -a "$RUN/scenario.log" >&2; }
+# Per-scenario state: RUN (directory), FAILS (failed checks), BOOTN (boots);
+# SAY_TAG prefixes the terminal copy (parallel runs interleave there)
+say() {
+	local t
+	t=$(date +%T)
+	echo "[$t] $*" >> "$RUN/scenario.log"
+	echo "[$t] ${SAY_TAG:-}$*" >&2
+}
 
 check() { # check DESCRIPTION CMD... ; records ok/FAIL, never aborts
 	local d=$1

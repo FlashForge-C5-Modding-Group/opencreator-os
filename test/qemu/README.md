@@ -9,16 +9,28 @@ needs root.
 
 ```sh
 # WSL, from the repo root; first run downloads and builds the QEMU kernel
-test/qemu/run.sh            # all scenarios (about 30 min)
+test/qemu/run.sh            # all scenarios, 8 at a time on 16 CPUs (about 14 min)
+test/qemu/run.sh -j 1       # one after the other (about 50 min)
 test/qemu/run.sh S1 S8      # stock-side only, a few minutes
 ```
+
+`-j N` (or `QEMU_JOBS=N`) runs N scenarios at once, each with its own QEMU
+(one host CPU each under TCG) and run directory; the default is half the
+host's CPUs. The scenarios that reuse S2's committed image
+(`prepare_committed`) start once S2 has finished; without S2 in the run, the
+first of them builds the image and the others wait for it. The rest start
+longest first, by the durations of their last passing runs
+(`$QWORK/scenario-times`). Terminal lines carry the scenario name; each
+`scenario.log` has only its own. S12 (the whole-eMMC backup) takes 12 to 14
+minutes on its own and bounds a parallel run; the rest finish in about 10.
 
 ## Prerequisites
 
 - Host tools: `qemu-system-mipsel` (built with io_uring, as Ubuntu's is;
   otherwise set `QEMU_AIO=threads`), `python3`, `sgdisk`, `sfdisk`,
   `mkfs.ext4`/`debugfs` (e2fsprogs), `mkfs.vfat`, mtools (`mcopy`, `mtype`,
-  `mdir`), `mksquashfs`/`unsquashfs`, `git`, `curl`.
+  `mdir`), `mksquashfs`/`unsquashfs`, `git`, `curl`, `flock` (util-linux),
+  bash 5.1 or newer.
 - A MIPS cross compiler for the QEMU kernel: the OpenWrt toolchain from
   `./build.sh` or `~/ing/mips-xburst2-linux-toolchain-r6.0.0` (or set
   `CROSS_COMPILE`).
@@ -33,10 +45,11 @@ test/qemu/run.sh S1 S8      # stock-side only, a few minutes
 
 Fixtures and run directories live under `~/build/opencreator-os/qemu/`
 (`QWORK`), outside the repo: the kernel tree and `vmlinux`, the stock root
-squashfs, the 2 GiB base eMMC image, and `runs/<timestamp>/<scenario>/` with
-every boot's serial log (`*.log`), command results (`*.res`), step files and
-`scenario.log`. Images of passed scenarios are deleted; failed ones are kept.
-Only the last `KEEP_RUNS` (3) run directories are kept.
+squashfs, the 2 GiB base eMMC image, `scenario-times`, and
+`runs/<timestamp>/<scenario>/` with every boot's serial log (`*.log`), command
+results (`*.res`), step files and `scenario.log`. Images of passed scenarios
+are deleted; failed ones are kept. Only the last `KEEP_RUNS` (3) run
+directories are kept. Two runs at the same time need different `QWORK`s.
 
 ## What is real and what is emulated
 
