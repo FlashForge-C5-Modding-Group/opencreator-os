@@ -168,3 +168,12 @@ enables by default). Check a change against the built `kernel.config`.
 Every package is built from source by this build (musl, hard-float,
 `mipsel_mips32`). Do not install packages from downloads.openwrt.org for
 `mipsel_mips32`: those are soft-float and will not run.
+
+Packages come from `DEFAULT_PACKAGES` in `feed/x2600/Makefile` (plus
+`config/openwrt.seed`); the target drops OpenWrt's default `mtd` and `urngd`:
+
+- No `fdisk` (and its `libfdisk`, `libncurses`, `terminfo`): OpenWrt never
+  calls it. The installer's `fdisk -l` (`part_table`) and `c5-chainload.sh`
+  run only on stock.
+- No `urngd`: on the printer the kernel logs `random: crng init done` at
+  3.9 s, during preinit, and urngd only started at 11.9 s.
