@@ -276,6 +276,10 @@ go_now() {
 		[ -f "$c" ] && echo 0 > "$c"
 	done
 	sync
+	# Backlight off (stock's gpio_backlight, PC14): the panel is always
+	# powered and would show the display clocks being stopped and
+	# reprogrammed until the new kernel's fb driver turns it back on.
+	echo 0 > /sys/class/backlight/backlight_gpio0/brightness 2>/dev/null
 	echo "c5-chainload: jumping"
 	echo 1 > /sys/module/chainload/parameters/go
 	echo "c5-chainload: jump refused (dmesg | grep chainload); power-cycle to recover"

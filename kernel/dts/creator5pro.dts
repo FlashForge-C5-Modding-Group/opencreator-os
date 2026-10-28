@@ -55,10 +55,16 @@
 	 * c5-heartbeat), PB17/PB18 (MCU reset/boot pins for flashing).
 	 */
 
-	backlight {
+	/*
+	 * As stock (gpio_backlight.ko backlight_enabled=0, turned on from
+	 * userspace 0.5 s after the boot logo): no default-on. The DPU node
+	 * links it, so gpio-backlight keeps the pin as found at probe and the
+	 * fb driver (kernel/patches/0006) turns it off before programming the
+	 * display clocks and on 500 ms after the DPU sends frames.
+	 */
+	backlight: backlight {
 		compatible = "gpio-backlight";
 		gpios = <&gpc 14 GPIO_ACTIVE_HIGH INGENIC_GPIO_NOBIAS>;
-		default-on;
 	};
 
 	panel {
@@ -149,6 +155,7 @@
 	status = "okay";
 	ingenic,disable-rdma-fb = <0>;
 	ingenic,rot_angle = <0>;
+	backlight = <&backlight>;
 };
 
 /* ---- eMMC: as stock ---- */

@@ -162,7 +162,8 @@ SIGHUP ignored, and writes its progress to `/dev/console`. In order, it:
 3. Downs `wlan0`, `wlan1` and `eth0`, and unloads `8821cu`, `rtl8188fu` and
    `soc_mac_driver`.
 4. Unbinds the dwc2 USB controllers. USB and the network do DMA into RAM.
-5. Offlines cpu1 and writes `go`.
+5. Offlines cpu1, turns stock's backlight off (`backlight_gpio0`; the
+   OpenWrt fb driver turns it on once its display runs) and writes `go`.
 
 SSH stays up until the network goes down, just before the jump.
 

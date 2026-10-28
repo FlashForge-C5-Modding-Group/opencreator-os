@@ -1,0 +1,111 @@
+From: OpenCreator
+Subject: [PATCH] fbdev: ingenic: light the backlight only after the DPU runs
+
+The Creator5Pro KX070 is always powered, so a backlight that is on while
+the DPU and LVDS PHY are idle or being reprogrammed shows noise. Stock
+keeps its gpio backlight off at load and turns it on 0.5 s after the boot
+logo is on the screen.
+
+Take an optional "backlight" phandle from the DPU node. Turn it off at
+probe, before the EPLL and the LVDS PHY PLL are programmed (a chainload
+from stock arrives with it on), and on 500 ms after RDMA starts. Blank
+turns it off before the DPU stops; unblank turns it on 500 ms after the
+DPU restarts. Repeated blank/unblank requests no longer restart the DPU
+or unbalance its clocks.
+
+---
+diff --git a/module_drivers/drivers/video/fbdev/ingenic/fb_stage/ingenicfb.c b/module_drivers/drivers/video/fbdev/ingenic/fb_stage/ingenicfb.c
+--- a/module_drivers/drivers/video/fbdev/ingenic/fb_stage/ingenicfb.c
++++ b/module_drivers/drivers/video/fbdev/ingenic/fb_stage/ingenicfb.c
+@@ -33,6 +33,8 @@
+ #include <linux/string.h>
+ #include <linux/kthread.h>
+ #include <linux/gpio.h>
++#include <linux/backlight.h>
++#include <linux/workqueue.h>
+ #include <asm/cacheflush.h>
+ #include <linux/of_address.h>
+ #include <linux/dma-buf.h>
+@@ -73,6 +75,32 @@
+ struct lcd_panel *fbdev_panel = NULL;
+ struct platform_device *fbdev_pdev = NULL;
+ 
++/*
++ * Optional "backlight" phandle on the DPU node. The backlight stays off
++ * until the DPU sends frames and comes on BL_ON_DELAY_MS later, the order
++ * the Creator5Pro stock system uses for its always-powered panel.
++ */
++#define BL_ON_DELAY_MS	500
++static struct backlight_device *fbdev_bl;
++
++static void ingenicfb_bl_on(struct work_struct *work)
++{
++	backlight_enable(fbdev_bl);
++}
++static DECLARE_DELAYED_WORK(fbdev_bl_work, ingenicfb_bl_on);
++
++static void ingenicfb_bl_schedule_on(void)
++{
++	if (fbdev_bl)
++		schedule_delayed_work(&fbdev_bl_work, msecs_to_jiffies(BL_ON_DELAY_MS));
++}
++
++static void ingenicfb_bl_off(void)
++{
++	cancel_delayed_work_sync(&fbdev_bl_work);
++	backlight_disable(fbdev_bl);
++}
++
+ static int showFPS = 0;
+ 
+ static bool panel_mipi_init_ok = false;
+@@ -879,8 +907,12 @@
+ 	struct dpu_ctrl *dctrl = &fbdev->dctrl;
+ 	int ret = 0;
+ 
++	/* Already running: restarting the DPU would glitch a lit panel. */
++	if (!dctrl->blank)
++		return 0;
+ 	ret = dpu_ctrl_resume(dctrl);
+ 	dctrl->blank = 0;
++	ingenicfb_bl_schedule_on();
+ 	return ret;
+ }
+ 
+@@ -889,6 +921,9 @@
+ 	struct dpu_ctrl *dctrl = &fbdev->dctrl;
+ 	int ret = 0;
+ 
++	if (dctrl->blank)
++		return 0;
++	ingenicfb_bl_off();
+ 	ret = dpu_ctrl_suspend(dctrl);
+ 	dctrl->blank = 1;
+ 
+@@ -1413,6 +1448,7 @@
+ 		pan_init_logo(fbdev->fb);
+ 
+ 		dctrl->work_in_rdma = true;
++		ingenicfb_bl_schedule_on();
+ 	} else {
+ 		dctrl->work_in_rdma = false;
+ 	}
+@@ -1482,6 +1518,18 @@
+ 
+ static int ingenicfb_probe(struct platform_device *pdev)
+ {
++	struct backlight_device *bl;
++
++	/*
++	 * Off before the clocks and the LVDS PHY are programmed: a chainload
++	 * from stock arrives with the backlight still on.
++	 */
++	bl = devm_of_find_backlight(&pdev->dev);
++	if (IS_ERR(bl))
++		return dev_err_probe(&pdev->dev, PTR_ERR(bl), "no backlight\n");
++	backlight_disable(bl);
++	fbdev_bl = bl;
++
+ 	WARN_ON(fbdev_pdev != NULL);
+ 
+ 	fbdev_pdev = pdev;
