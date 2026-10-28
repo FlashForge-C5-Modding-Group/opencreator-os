@@ -172,6 +172,12 @@ Every package is built from source by this build (musl, hard-float,
 Packages come from `DEFAULT_PACKAGES` in `feed/x2600/Makefile` (plus
 `config/openwrt.seed`); the target drops OpenWrt's default `mtd` and `urngd`:
 
+- Wi-Fi client: `wpa-supplicant-mbedtls` instead of `wpad-basic-mbedtls`.
+  Only `wpa_supplicant` runs (OpenWrt's `/etc/init.d/wpad` and `mac80211.sh`
+  start `hostapd` only if it is installed). It is OpenWrt's full mbedTLS
+  build: WPA3-SAE, OWE, Suite-B 192, 802.11r, and PMF (802.11w has no build
+  switch any more). `wpa-supplicant-basic` is not an option: it uses the
+  internal TLS, which has no SAE or OWE.
 - No `fdisk` (and its `libfdisk`, `libncurses`, `terminfo`): OpenWrt never
   calls it. The installer's `fdisk -l` (`part_table`) and `c5-chainload.sh`
   run only on stock.

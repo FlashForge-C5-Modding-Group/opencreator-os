@@ -15,7 +15,7 @@ CONFIG_IMAGEOPT=y
 CONFIG_VERSIONOPT=y
 CONFIG_VERSION_DIST="opencreator-os"
 CONFIG_VERSION_HOME_URL="https://github.com/FlashForge-C5-Modding-Group/opencreator-os"
-CONFIG_PACKAGE_wpad-basic-mbedtls=y
+CONFIG_PACKAGE_wpa-supplicant-mbedtls=y
 CONFIG_PACKAGE_kmod-rtw88-8821cu=y
 CONFIG_PACKAGE_rtl8821ce-firmware=y
 # The vendor kernel tree has warnings that -Werror turns into failures.

@@ -25,10 +25,12 @@ include $(INCLUDE_DIR)/target.mk
 # dd), urngd (the kernel's CRNG is ready during preinit, seconds before urngd
 # would start).
 DEFAULT_PACKAGES := $(filter-out mtd urngd,$(DEFAULT_PACKAGES))
+# wpa-supplicant-mbedtls: client only (no hostapd process), with WPA3-SAE,
+# OWE, Suite-B 192 and 802.11r/w.
 DEFAULT_PACKAGES += dropbear block-mount partx-utils e2fsprogs \
 	kmod-usb-serial kmod-usb-serial-ch341 kmod-usb-serial-cp210x \
 	kmod-usb-serial-ftdi kmod-usb-acm \
-	wpad-basic-mbedtls kmod-rtw88-8821cu rtl8821ce-firmware iwinfo \
+	wpa-supplicant-mbedtls kmod-rtw88-8821cu rtl8821ce-firmware iwinfo \
 	openssh-sftp-server
 
 # The SPL boots with init=/linuxrc.
