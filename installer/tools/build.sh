@@ -1,7 +1,8 @@
 #!/bin/bash
 # Build static util-linux sfdisk and partx for the stock Creator 5 Pro
 # userland (MIPS32r2 o32, NaN2008). The installer uses sfdisk to rewrite the
-# GPT and partx to tell the kernel about the changed partitions (BLKPG; sfdisk
+# GPT, and partx to find partitions by GPT name (slot.sh) and to tell the
+# kernel about the changed partitions (BLKPG; sfdisk
 # only tries BLKRRPART, which fails while the disk is in use). Stock has only
 # busybox fdisk. Runs in WSL.
 #

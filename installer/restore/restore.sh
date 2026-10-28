@@ -9,7 +9,7 @@
 #   --hook   started by the stock USB hook: pause on the result screen
 # Other non-option arguments (stock passes MACHINE and PID) are ignored.
 #
-# Files next to this script (made by tools/make-restore-stick.sh): lib.sh,
+# Files next to this script (made by tools/make-restore-stick.sh): lib.sh, slot.sh,
 # fb/*.raw, partmap.txt, MANIFEST.txt, SHA256SUMS, MD5SUMS, the images and
 # restore.conf with one action per line:
 #   write NAME IMAGE   write IMAGE to GPT partition NAME (whole partition)
@@ -103,18 +103,17 @@ if [ "$want" != "$have" ]; then
 fi
 log "check: partition table matches the backup"
 
-OWN=$(own_slot) || refuse "root=$(cmdline_root) is neither GPT rootfs nor rootfs2"
-log "check: running slot $OWN ($(cmdline_root)), boot flag '$(flag_read)'"
+OWN=$(c5_own_slot) || refuse "root=$(c5_root_dev) is neither GPT rootfs nor rootfs2"
+log "check: running slot $OWN ($(c5_root_dev)), boot flag '$(c5_flag_read)'"
 
 # Parse and check every action; remember the writes for the second pass.
 WRITES='' FLAG_TO='' n_act=0
 lineno=0
-set -f
 while IFS= read -r line || [ -n "$line" ]; do
 	lineno=$((lineno + 1))
 	line=$(printf '%s' "$line" | tr -d '\r')
-	# shellcheck disable=SC2086 # split the action into words
-	set -- $line
+	# shellcheck disable=SC2086 # split into words; globbing off only here (c5_part_dev globs sysfs)
+	set -f; set -- $line; set +f
 	[ $# -eq 0 ] && continue
 	case "$1" in
 	\#*) continue ;;
@@ -129,21 +128,21 @@ while IFS= read -r line || [ -n "$line" ]; do
 		esac
 		[ -f "$SELF_DIR/$img" ] || refuse "image $img missing"
 		[ -n "$(sums_get "$SELF_DIR/$SUMS" "$img")" ] || refuse "image $img is not listed in $SUMS"
-		dev=$(part_dev "$name") || refuse "GPT partition '$name' not found"
-		if [ "$name" = "$(slot_kname "$OWN")" ] || [ "$name" = "$(slot_rname "$OWN")" ] || [ "$dev" = "$(cmdline_root)" ]; then
+		dev=$(c5_part_dev "$name") || refuse "GPT partition '$name' not found"
+		if [ "$name" = "$(c5_slot_kname "$OWN")" ] || [ "$name" = "$(c5_slot_rname "$OWN")" ] || [ "$dev" = "$(c5_root_dev)" ]; then
 			refuse "$name ($dev) belongs to the running slot $OWN; restore it from the other slot or from OpenWrt"
 		fi
-		if is_mounted "$dev"; then
+		if c5_mounted "$dev"; then
 			if [ "$name" = usershare ]; then
 				refuse "usershare ($dev) is mounted by stock (/usr/prog, /etc) and cannot be restored while stock runs; restore it from OpenWrt or another rescue system"
 			fi
 			refuse "$name ($dev) is mounted"
 		fi
 		isz=$(file_bytes "$SELF_DIR/$img")
-		psz=$(part_bytes "$dev") || refuse "cannot read the size of $dev"
+		psz=$(c5_part_bytes "$name") || refuse "cannot read the size of $dev"
 		[ "$isz" = "$psz" ] || refuse "$img is $isz bytes, $name ($dev) is $psz bytes; expected a whole-partition image"
 		case "$name" in
-		kernel*) [ "$(magic_hex "$SELF_DIR/$img")" = "$UIMAGE_MAGIC" ] || refuse "$img does not start with a uImage header" ;;
+		kernel*) [ "$(c5_magic_hex "$SELF_DIR/$img")" = "$UIMAGE_MAGIC" ] || refuse "$img does not start with a uImage header" ;;
 		rootfs*) [ "$(magic_str "$SELF_DIR/$img")" = "$SQUASHFS_MAGIC" ] || refuse "$img does not start with squashfs" ;;
 		esac
 		case " $WRITES " in *" $name:"*) refuse "restore.conf writes $name twice" ;; esac
@@ -157,28 +156,27 @@ while IFS= read -r line || [ -n "$line" ]; do
 	esac
 	n_act=$((n_act + 1))
 done < "$CONF"
-set +f
 [ "$n_act" -gt 0 ] || refuse "restore.conf lists no actions"
 
 # image that will be in partition NAME after the restore (empty: unchanged)
 planned() { for w in $WRITES; do [ "${w%%:*}" = "$1" ] && echo "${w#*:}"; done; }
 
 if [ -n "$FLAG_TO" ]; then
-	for name in "$(slot_kname "$FLAG_TO")" "$(slot_rname "$FLAG_TO")"; do
+	for name in "$(c5_slot_kname "$FLAG_TO")" "$(c5_slot_rname "$FLAG_TO")"; do
 		img=$(planned "$name")
-		if [ -n "$img" ]; then src=$SELF_DIR/$img; else src=$(part_dev "$name"); fi
+		if [ -n "$img" ]; then src=$SELF_DIR/$img; else src=$(c5_part_dev "$name"); fi
 		case "$name" in
-		kernel*) [ "$(magic_hex "$src")" = "$UIMAGE_MAGIC" ] || refuse "flag $FLAG_TO: $name would not hold a uImage" ;;
+		kernel*) [ "$(c5_magic_hex "$src")" = "$UIMAGE_MAGIC" ] || refuse "flag $FLAG_TO: $name would not hold a uImage" ;;
 		rootfs*) [ "$(magic_str "$src")" = "$SQUASHFS_MAGIC" ] || refuse "flag $FLAG_TO: $name would not hold squashfs" ;;
 		esac
 	done
 fi
 
 for w in $WRITES; do
-	log "check: would write ${w#*:} -> ${w%%:*} ($(part_dev "${w%%:*}"))"
+	log "check: would write ${w#*:} -> ${w%%:*} ($(c5_part_dev "${w%%:*}"))"
 done
-if [ -n "$WRITES" ] && [ "$(flag_slot)" != "$OWN" ]; then
-	log "check: boot flag names slot $(flag_slot); would point it back at the running slot $OWN before writing"
+if [ -n "$WRITES" ] && [ "$(c5_flag_slot)" != "$OWN" ]; then
+	log "check: boot flag names slot $(c5_flag_slot); would point it back at the running slot $OWN before writing"
 fi
 [ -z "$FLAG_TO" ] || log "check: would point the boot flag at slot $FLAG_TO after all writes are verified"
 if [ "$CHECK" = 1 ]; then
@@ -196,23 +194,23 @@ if [ -n "$WRITES" ]; then
 fi
 for w in $WRITES; do
 	name=${w%%:*} img=${w#*:}
-	dev=$(part_dev "$name")
+	dev=$(c5_part_dev "$name")
 	sz=$(file_bytes "$SELF_DIR/$img")
 	log "write: $img ($sz bytes) -> $name ($dev)"
 	dd if="$SELF_DIR/$img" of="$dev" bs=1M conv=fsync,notrunc 2>/dev/null || fail "dd to $dev failed"
-	drop_caches
+	c5_drop_caches
 	[ "$(dev_sum "$dev" "$sz")" = "$(sums_get "$SELF_DIR/$SUMS" "$img")" ] || fail "read-back mismatch on $dev ($name)"
 	log "write: $name read back OK ($SUM)"
 done
 
 FLAG_CHANGED=0
 if [ -n "$FLAG_TO" ]; then
-	if [ "$(flag_slot)" = "$FLAG_TO" ]; then
-		log "flag: already slot $FLAG_TO ('$(flag_read)')"
+	if [ "$(c5_flag_slot)" = "$FLAG_TO" ]; then
+		log "flag: already slot $FLAG_TO ('$(c5_flag_read)')"
 	else
-		flag_write "$FLAG_TO" || fail "boot flag write failed (now '$(flag_read)')"
+		c5_flag_write "$FLAG_TO" || fail "boot flag write failed (now '$(c5_flag_read)')"
 		FLAG_CHANGED=1
-		log "flag: boot flag -> slot $FLAG_TO ('$(flag_read)')"
+		log "flag: boot flag -> slot $FLAG_TO ('$(c5_flag_read)')"
 	fi
 fi
 

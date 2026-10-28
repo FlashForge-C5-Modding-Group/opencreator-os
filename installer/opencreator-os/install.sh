@@ -29,8 +29,8 @@
 #
 # Payload in DIR: kernel.uimage root.squashfs sysupgrade.tar VERSION
 # chainload/chainload.ko chainload/c5-chainload.sh SHA256SUMS MD5SUMS,
-# opencreator-os/bin/sfdisk, optional opencreator-os/authorized_keys,
-# opencreator-os/FLIP and opencreator-os/CHAINLOAD.
+# opencreator-os/slot.sh, opencreator-os/bin/sfdisk and bin/partx, optional
+# opencreator-os/authorized_keys, opencreator-os/FLIP and opencreator-os/CHAINLOAD.
 set -u
 
 usage() { sed -n '2,33s/^# \{0,1\}//p' "$0"; }
@@ -73,7 +73,7 @@ STICK=$(cd "$STICK" 2>/dev/null && pwd) || { echo "install: payload directory no
 C5_SFDISK=${C5_SFDISK:-$SELF_DIR/bin/sfdisk}
 C5_PARTX=${C5_PARTX:-$SELF_DIR/bin/partx}
 if [ -z "${C5_SYSTEM:-}" ]; then
-	if [ -f /lib/c5/slot.sh ] && [ -f /etc/openwrt_release ]; then C5_SYSTEM=openwrt; else C5_SYSTEM=stock; fi
+	if [ -f /etc/openwrt_release ]; then C5_SYSTEM=openwrt; else C5_SYSTEM=stock; fi
 fi
 case "$C5_SYSTEM" in
 openwrt) C5_DATA=${C5_DATA:-/data} ;;
@@ -139,29 +139,29 @@ preflight() {
 	sum_init || abort "neither sha256sum nor md5sum available"
 
 	for n in kernel rootfs kernel2 rootfs2 ota; do
-		part_dev "$n" > /dev/null || abort "GPT partition '$n' not found (or not unique) on $C5_DISK"
+		c5_part_dev "$n" > /dev/null || abort "GPT partition '$n' not found on $C5_DISK"
 	done
-	OWN=$(own_slot) || abort "root=$(cmdline_root) is neither GPT rootfs ($(part_dev rootfs)) nor rootfs2 ($(part_dev rootfs2))"
-	FLAG=$(flag_slot) || abort "cannot read the boot flag"
+	OWN=$(c5_own_slot) || abort "root=$(c5_root_dev) is neither GPT rootfs ($(c5_part_dev rootfs)) nor rootfs2 ($(c5_part_dev rootfs2))"
+	FLAG=$(c5_flag_slot)
 	# Before the first partition write the flag must name the running slot.
-	TGT=$(other_slot "$OWN")
-	OKDEV=$(part_dev "$(slot_kname "$OWN")")
-	ORDEV=$(part_dev "$(slot_rname "$OWN")")
-	TK=$(part_dev "$(slot_kname "$TGT")")
-	TR=$(part_dev "$(slot_rname "$TGT")")
+	TGT=$(c5_other_slot)
+	OKDEV=$(c5_part_dev "$(c5_slot_kname "$OWN")")
+	ORDEV=$(c5_part_dev "$(c5_slot_rname "$OWN")")
+	TK=$(c5_part_dev "$(c5_slot_kname "$TGT")")
+	TR=$(c5_part_dev "$(c5_slot_rname "$TGT")")
 	for d in "$TK" "$TR"; do
-		if [ "$d" = "$OKDEV" ] || [ "$d" = "$ORDEV" ] || [ "$d" = "$(cmdline_root)" ]; then
+		if [ "$d" = "$OKDEV" ] || [ "$d" = "$ORDEV" ] || [ "$d" = "$(c5_root_dev)" ]; then
 			abort "target $d is part of the running slot"
 		fi
-		is_mounted "$d" && abort "target $d is mounted"
+		c5_mounted "$d" && abort "target $d is mounted"
 	done
-	TKB=$(part_bytes "$TK") || abort "cannot read the size of $TK"
-	TRB=$(part_bytes "$TR") || abort "cannot read the size of $TR"
+	TKB=$(c5_part_bytes "$(c5_slot_kname "$TGT")") || abort "cannot read the size of $TK"
+	TRB=$(c5_part_bytes "$(c5_slot_rname "$TGT")") || abort "cannot read the size of $TR"
 
 	for f in kernel.uimage root.squashfs chainload/chainload.ko chainload/c5-chainload.sh; do
 		[ -s "$STICK/$f" ] || abort "payload file $f missing in $STICK"
 	done
-	[ "$(magic_hex "$STICK/kernel.uimage")" = "$UIMAGE_MAGIC" ] || abort "kernel.uimage is not a uImage (magic $(magic_hex "$STICK/kernel.uimage"))"
+	[ "$(c5_magic_hex "$STICK/kernel.uimage")" = "$UIMAGE_MAGIC" ] || abort "kernel.uimage is not a uImage (magic $(c5_magic_hex "$STICK/kernel.uimage"))"
 	[ "$(magic_str "$STICK/root.squashfs")" = "$SQUASHFS_MAGIC" ] || abort "root.squashfs is not a squashfs image"
 	KSZ=$(file_bytes "$STICK/kernel.uimage")
 	RSZ=$(file_bytes "$STICK/root.squashfs")
@@ -195,8 +195,8 @@ preflight() {
 
 	# running stock slot, saved to userdata before anything is written
 	[ "$(magic_str "$ORDEV")" = "$SQUASHFS_MAGIC" ] || abort "running rootfs $ORDEV is not squashfs"
-	OKB=$(part_bytes "$OKDEV") || abort "cannot read the size of $OKDEV"
-	ORB=$(part_bytes "$ORDEV") || abort "cannot read the size of $ORDEV"
+	OKB=$(c5_part_bytes "$(c5_slot_kname "$OWN")") || abort "cannot read the size of $OKDEV"
+	ORB=$(c5_part_bytes "$(c5_slot_rname "$OWN")") || abort "cannot read the size of $ORDEV"
 	BU=$(squashfs_bytes "$ORDEV") || abort "cannot read bytes_used of $ORDEV"
 	if [ "$BU" -le 0 ] || [ "$BU" -gt "$ORB" ]; then abort "implausible squashfs bytes_used $BU on $ORDEV"; fi
 	OKSUM=$(dev_sum "$OKDEV" "$OKB")
@@ -230,7 +230,7 @@ preflight() {
 
 	INSTALLED=0
 	if grep -q "^written slot=$TGT " "$OCDIR/install.state" 2>/dev/null &&
-		[ "$(magic_hex "$TK")" = "$UIMAGE_MAGIC" ] && [ "$(magic_str "$TR")" = "$SQUASHFS_MAGIC" ]; then
+		[ "$(c5_magic_hex "$TK")" = "$UIMAGE_MAGIC" ] && [ "$(magic_str "$TR")" = "$SQUASHFS_MAGIC" ]; then
 		INSTALLED=1
 	fi
 	backup_plan
@@ -314,7 +314,7 @@ save_stock() {
 		echo "kernel: $OKDEV ($OKB bytes, whole partition)"
 		echo "rootfs: $ORDEV (squashfs bytes_used $BU of $ORB)"
 		echo "kernel release: $C5_UNAME_R"
-		echo "cmdline: $(cat "$C5_CMDLINE")"
+		echo "cmdline: $(cat "$C5_CMDLINE_FILE")"
 		if [ -f "${C5_OTA_INFO:-/etc/ota_info}" ]; then
 			echo "ota_info:"
 			sed 's/^/  /' "${C5_OTA_INFO:-/etc/ota_info}"
@@ -407,7 +407,7 @@ write_images() {
 	log "write: root.squashfs ($RSZ bytes) -> $TR"
 	dd if="$STICK/root.squashfs" of="$TR" bs=1M conv=fsync,notrunc 2>/dev/null || fail "dd to $TR failed"
 	ui_progress 2 2
-	drop_caches
+	c5_drop_caches
 	[ "$(dev_sum "$TK" "$KSZ")" = "$KSUM" ] || fail "read-back mismatch on $TK"
 	[ "$(dev_sum "$TR" "$RSZ")" = "$RSUM" ] || fail "read-back mismatch on $TR"
 	log "write: slot $TGT written and read back OK ($SUM)"
@@ -581,8 +581,8 @@ EOF
 	printf '%s\n' "$PT" > "$BK/partmap.txt"
 	{
 		echo "date: $(date '+%F %T')"
-		echo "running root: $(cmdline_root)"
-		echo "ota flag: $(flag_read)"
+		echo "running root: $(c5_root_dev)"
+		echo "ota flag: $(c5_flag_read)"
 		cat "${C5_OTA_INFO:-/etc/ota_info}" 2>/dev/null
 		printf '%s\n' "$PT"
 		echo "installer: opencreator-os $VERSION"
@@ -592,7 +592,7 @@ EOF
 	sync
 
 	ui_info backup-verify "Verifying the backup on the stick"
-	drop_caches
+	c5_drop_caches
 	bk_done=0
 	ui_progress 0 "$BK_TOTAL_MIB"
 	while read -r bk_name bk_dev bk_skip bk_n; do
@@ -623,8 +623,8 @@ EOF
 
 # c5os_kernel_ok: the kernel's partitions match the GPT's p7/p8
 c5os_kernel_ok() {
-	[ "$(part_bytes "$UD_DEV")" = $((UD_SIZE * 512)) ] &&
-		[ "$(part_bytes "$C5OS_DEV")" = $((C5OS_SIZE * 512)) ] &&
+	[ "$(c5_part_bytes userdata)" = $((UD_SIZE * 512)) ] &&
+		[ "$(c5_part_bytes c5os)" = $((C5OS_SIZE * 512)) ] &&
 		[ "$(cat "$C5_SYSBLOCK/${C5OS_DEV##*/}/start" 2>/dev/null)" = "$C5OS_START" ]
 }
 
@@ -687,7 +687,7 @@ make_c5os() {
 		rm -f "$OCDIR/c5os-rebooted"
 		fs_blocks=$(dumpe2fs -h "$UD_DEV" 2>/dev/null | sed -n 's/^Block count: *//p')
 		fs_bs=$(dumpe2fs -h "$UD_DEV" 2>/dev/null | sed -n 's/^Block size: *//p')
-		if [ "${fs_blocks:-0}" -lt $(($(part_bytes "$UD_DEV") / ${fs_bs:-4096})) ] ||
+		if [ "${fs_blocks:-0}" -lt $(($(c5_part_bytes userdata) / ${fs_bs:-4096})) ] ||
 			! tune2fs -l "$C5OS_DEV" 2>/dev/null | grep -q '^Filesystem volume name: *c5os$'; then
 			log "c5os: finishing an interrupted c5os setup"
 			ui_info c5os-run "Finishing the c5os partition\nDo not power off."
@@ -752,7 +752,7 @@ make_c5os() {
 		dd if=/tmp/c5os-lba0 of="$C5_DISK" bs=1 count=440 conv=notrunc,fsync 2>/dev/null || fail "cannot restore the MBR boot code"
 		log "c5os: MBR boot code restored"
 	fi
-	drop_caches
+	c5_drop_caches
 	if "$C5_PARTX" -u --nr 7:8 "$C5_DISK" > /tmp/c5os-partx.log 2>&1; then
 		log "c5os: kernel told about p7/p8 (partx)"
 	else
@@ -779,18 +779,18 @@ make_c5os() {
 do_swap() {
 	if [ "$FLAG" = "$OWN" ]; then
 		[ "$INSTALLED" = 1 ] || abort "swap: OpenWrt is not installed"
-		if ! flag_write "$TGT"; then
-			flag_write "$OWN"
-			fail "boot flag write failed; flag set back to slot $OWN ('$(flag_read)')"
+		if ! c5_flag_write "$TGT"; then
+			c5_flag_write "$OWN"
+			fail "boot flag write failed; flag set back to slot $OWN ('$(c5_flag_read)')"
 		fi
-		log "swap: boot flag -> slot $TGT ('$(flag_read)'); rebooting into OpenWrt"
+		log "swap: boot flag -> slot $TGT ('$(c5_flag_read)'); rebooting into OpenWrt"
 		ui_info swap "Rebooting into OpenWrt (slot $TGT)"
 		sync
 		$C5_REBOOT
 		exit 0
 	fi
-	flag_write "$OWN" || fail "boot flag write failed ('$(flag_read)')"
-	log "swap: boot flag -> slot $OWN ('$(flag_read)'); stock stays the boot slot"
+	c5_flag_write "$OWN" || fail "boot flag write failed ('$(c5_flag_read)')"
+	log "swap: boot flag -> slot $OWN ('$(c5_flag_read)'); stock stays the boot slot"
 	finish swap "Boot flag set to stock (slot $OWN)\nThe printer keeps booting stock." 1
 }
 
@@ -852,12 +852,12 @@ do_install() {
 			finish written "$written_text" 1
 		fi
 		[ "$KNOWN_GOOD" = 1 ] || chainload_test
-		if ! flag_write "$TGT"; then
-			flag_write "$OWN"
-			fail "boot flag write failed; flag set back to slot $OWN ('$(flag_read)')"
+		if ! c5_flag_write "$TGT"; then
+			c5_flag_write "$OWN"
+			fail "boot flag write failed; flag set back to slot $OWN ('$(c5_flag_read)')"
 		fi
 		echo "flipped slot=$TGT version=$VERSION" >> "$OCDIR/install.state"
-		log "flip: boot flag -> slot $TGT ('$(flag_read)'); rebooting into OpenWrt"
+		log "flip: boot flag -> slot $TGT ('$(c5_flag_read)'); rebooting into OpenWrt"
 		log "install: OK"
 		ui_info 'done' "Rebooting into OpenWrt"
 		sync
@@ -879,8 +879,6 @@ do_install() {
 }
 
 openwrt_main() {
-	# shellcheck disable=SC1091
-	. /lib/c5/slot.sh
 	# shellcheck disable=SC1091
 	. /lib/c5/restore.sh
 	if [ "$UI" != 1 ] && [ -z "$ACTION" ]; then
@@ -965,7 +963,7 @@ fi
 if [ "$STOCK_SAVED" = 1 ]; then save_plan="already saved in $SD"; else save_plan="would save $OKDEV ($OKB bytes) + $ORDEV ($BU bytes) to $SD"; fi
 log "check: running slot $OWN ($OKDEV, $ORDEV), boot flag slot $FLAG"
 if [ "$FLAG" != "$OWN" ]; then
-	log "check: boot flag names slot $FLAG ('$(flag_read)'); would point it back at the running slot $OWN before writing"
+	log "check: boot flag names slot $FLAG ('$(c5_flag_read)'); would point it back at the running slot $OWN before writing"
 fi
 if [ "$UP_TO_DATE" = 1 ] && [ "$PENDING" = 1 ]; then
 	log "check: slot $TGT matches the payload but a previous install did not finish; would redo the overlay cleanup on $TR"

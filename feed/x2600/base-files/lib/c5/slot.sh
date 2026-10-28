@@ -3,21 +3,25 @@
 #
 # Slot and boot-flag helpers for the Creator 5 Pro A/B eMMC layout.
 #
-# Sourced by preinit hooks, init scripts, /lib/upgrade/platform.sh and the
-# c5-* tools. Sourcing has no side effects and prints nothing.
+# Sourced by preinit hooks, init scripts, /lib/upgrade/platform.sh, the
+# c5-* tools and, from the install and restore sticks, by the installer on
+# stock (busybox 1.31) and OpenWrt. Sourcing has no side effects and prints
+# nothing.
 #
 # Layout (GPT names on the eMMC): kernel/rootfs = slot 1, kernel2/rootfs2 =
 # slot 2, ota = boot flag ("ota:kernel" -> slot 1, "ota:kernel2" -> slot 2,
 # the SPL compares the first 11 bytes), c5os = OpenWrt's /data.
 #
-# Overridable for testing: C5_DISK, C5_CMDLINE_FILE, C5_SYSBLOCK, C5_KMSG,
-# C5_MOUNTS, C5_DATA, C5_OCDIR, C5_UDATA.
+# Overridable for testing: C5_DISK, C5_PARTX, C5_CMDLINE_FILE, C5_SYSBLOCK,
+# C5_KMSG, C5_MOUNTS, C5_DROP_CACHES, C5_DATA, C5_OCDIR, C5_UDATA.
 
 C5_DISK=${C5_DISK:-/dev/mmcblk0}
+C5_PARTX=${C5_PARTX:-partx}
 C5_CMDLINE_FILE=${C5_CMDLINE_FILE:-/proc/cmdline}
 C5_SYSBLOCK=${C5_SYSBLOCK:-/sys/class/block}
 C5_KMSG=${C5_KMSG:-/dev/kmsg}
 C5_MOUNTS=${C5_MOUNTS:-/proc/mounts}
+C5_DROP_CACHES=${C5_DROP_CACHES:-/proc/sys/vm/drop_caches}
 C5_DATA=${C5_DATA:-/data}                       # c5os mount point (fstab)
 C5_OCDIR=${C5_OCDIR:-$C5_DATA/opencreator-os}   # logs, pending-commit, sysupgrade.tgz
 # Transient mount for the stock restore source and staged chainload kernel.
@@ -37,8 +41,8 @@ C5_TRIES_MAX=3
 # $1 = GPT partition name -> /dev/mmcblk0pN (return 1 if unknown)
 c5_part_dev() {
 	local nr='' u
-	if command -v partx >/dev/null 2>&1; then
-		nr=$(partx -s -g -o NR,NAME "$C5_DISK" 2>/dev/null |
+	if command -v "$C5_PARTX" >/dev/null 2>&1; then
+		nr=$("$C5_PARTX" -s -g -o NR,NAME "$C5_DISK" 2>/dev/null |
 			awk -v n="$1" '$2 == n { print $1; exit }')
 	fi
 	if [ -z "$nr" ]; then
@@ -104,7 +108,7 @@ c5_flag_slot() {
 
 c5_drop_caches() {
 	sync
-	{ echo 3 > /proc/sys/vm/drop_caches; } 2>/dev/null
+	{ echo 3 > "$C5_DROP_CACHES"; } 2>/dev/null
 	return 0
 }
 

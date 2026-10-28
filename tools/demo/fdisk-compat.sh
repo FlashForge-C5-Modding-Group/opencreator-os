@@ -1,7 +1,7 @@
 #!/bin/sh
 # Stand-in for stock busybox "fdisk -l DISK" (tools/ui-demo.sh): prints one
 # "NR START END SIZE NAME" line per GPT entry, the shape installer/lib.sh's
-# part_map and part_table parse, from util-linux sfdisk --dump.
+# part_table parses, from util-linux sfdisk --dump.
 [ "$1" = -l ] && [ -n "$2" ] || { echo "usage: $0 -l DISK" >&2; exit 2; }
 sfdisk --dump "$2" 2>/dev/null | awk '
 	/ : *start=/ {

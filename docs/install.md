@@ -41,7 +41,7 @@ below the stick needs about 8 GB free. The stick holds:
 
 ```
 runFirmwareExe.sh                      stock / OpenWrt USB hook
-opencreator-os/install.sh, lib.sh
+opencreator-os/{install,lib,slot}.sh   installer (slot.sh: the image's /lib/c5/slot.sh)
 opencreator-os/bin/sfdisk, bin/partx   static util-linux (installer/tools/build.sh)
 opencreator-os/os-installer            touchscreen app (--app; optional)
 opencreator-os/CHAINLOAD or FLIP, opencreator-os/authorized_keys   (options)

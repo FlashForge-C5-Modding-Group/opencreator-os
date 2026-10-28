@@ -51,7 +51,7 @@ fi
 for f in SHA256SUMS MANIFEST.txt partmap.txt; do
 	[ -s "$BK/$f" ] || die "missing $BK/$f"
 done
-for f in installer/restore/runFirmwareExe.sh installer/restore/restore.sh installer/opencreator-os/lib.sh \
+for f in installer/restore/runFirmwareExe.sh installer/restore/restore.sh installer/opencreator-os/lib.sh feed/x2600/base-files/lib/c5/slot.sh \
 	installer/fb/restoring.raw installer/fb/restored.raw installer/fb/restore-failed.raw; do
 	[ -s "$REPO/$f" ] || die "missing $REPO/$f"
 done
@@ -69,7 +69,7 @@ R=$OUT/opencreator-os-restore
 mkdir -p "$R/fb"
 install -m 0755 "$REPO/installer/restore/runFirmwareExe.sh" "$OUT/"
 install -m 0755 "$REPO/installer/restore/restore.sh" "$R/"
-install -m 0644 "$REPO/installer/opencreator-os/lib.sh" "$R/"
+install -m 0644 "$REPO/installer/opencreator-os/lib.sh" "$REPO/feed/x2600/base-files/lib/c5/slot.sh" "$R/"
 install -m 0644 "$REPO"/installer/fb/{restoring,restored,restore-failed}.raw "$R/fb/"
 tr -d '\r' < "$BK/partmap.txt" > "$R/partmap.txt"
 install -m 0644 "$BK/MANIFEST.txt" "$R/"

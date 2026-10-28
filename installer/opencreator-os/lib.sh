@@ -1,40 +1,36 @@
 # shellcheck shell=sh disable=SC2034
 # (SC2034: variables set here are used by the scripts that source this file)
 # Shared helpers for the opencreator-os installer scripts that run on the
-# stock Creator 5 Pro firmware (busybox sh). Sourced, not executed.
+# stock Creator 5 Pro firmware (busybox sh) or OpenWrt. Sourced, not
+# executed, by a script that sets SELF_DIR to the directory holding this
+# file and slot.sh (the image's /lib/c5/slot.sh: partitions, slots, boot
+# flag), which is sourced from here.
 #
 # Every path the scripts touch can be overridden through the environment so
 # the installer can be exercised against plain files on a PC; the defaults are
-# the stock printer's.
-#   C5_DISK        eMMC disk; partitions are ${C5_DISK}pN      (/dev/mmcblk0)
+# the stock printer's. Besides slot.sh's (C5_DISK, C5_PARTX, C5_CMDLINE_FILE,
+# C5_SYSBLOCK, C5_MOUNTS, C5_DROP_CACHES; see there):
 #   C5_FDISK       fdisk binary, run as "$C5_FDISK -l $C5_DISK" (fdisk)
 #   C5_SFDISK      util-linux sfdisk for GPT dump/write       (sfdisk; install.sh: the stick's bin/sfdisk)
-#   C5_PARTX       util-linux partx, tells the kernel (BLKPG) (install.sh: the stick's bin/partx)
-#   C5_SYSBLOCK    sysfs block class directory                (/sys/class/block)
-#   C5_CMDLINE     kernel command line file                   (/proc/cmdline)
-#   C5_MOUNTS      mount table                                (/proc/mounts)
 #   C5_DATA        stock userdata mount point                 (/usr/data)
-#   C5_DROP_CACHES page cache control file                    (/proc/sys/vm/drop_caches)
 #   C5_REBOOT      reboot command                             (reboot)
 #   C5_UNAME_R     kernel release                             ($(uname -r))
 #   C5_SUM         force md5sum or sha256sum                  (sha256sum if present)
 #   C5_C5OS_MIB    size of the c5os partition in MiB          (4096)
+# install.sh points C5_PARTX at the stick's bin/partx.
 # Callers set STICK (directory for the stick-side log) as needed;
 # LOG_STICK_NAME / LOG_DATA_NAME name the log files on the stick and in
 # $OCDIR. UI=1 sends screen requests to the os-installer app on stdout and
 # reads its answers on stdin (see the ui_* helpers).
 
-C5_DISK=${C5_DISK:-/dev/mmcblk0}
 C5_FDISK=${C5_FDISK:-fdisk}
 C5_SFDISK=${C5_SFDISK:-sfdisk}
-C5_SYSBLOCK=${C5_SYSBLOCK:-/sys/class/block}
-C5_CMDLINE=${C5_CMDLINE:-/proc/cmdline}
-C5_MOUNTS=${C5_MOUNTS:-/proc/mounts}
 C5_DATA=${C5_DATA:-/usr/data}
-C5_DROP_CACHES=${C5_DROP_CACHES:-/proc/sys/vm/drop_caches}
 C5_REBOOT=${C5_REBOOT:-reboot}
 C5_UNAME_R=${C5_UNAME_R:-$(uname -r)}
 C5_C5OS_MIB=${C5_C5OS_MIB:-4096}
+# shellcheck source-path=SCRIPTDIR source=../../feed/x2600/base-files/lib/c5/slot.sh
+. "$SELF_DIR/slot.sh"
 UI=${UI:-0}
 
 OCDIR=$C5_DATA/opencreator-os
@@ -179,93 +175,28 @@ ui_menu() {
 	case "$um_v" in '' | *[!0-9]*) UI_CHOICE=0 ;; *) UI_CHOICE=$um_v ;; esac
 }
 
-drop_caches() {
-	sync
-	echo 3 > "$C5_DROP_CACHES" 2>/dev/null
-	return 0
-}
-
 # --- partitions ----------------------------------------------------------------
 
-# part_map: "NAME NR" for every GPT entry of C5_DISK. Uses the same fdisk -l
-# listing stock's mmc_name_to_dev parses (NR START END SIZE NAME; name last).
-part_map() {
-	"$C5_FDISK" -l "$C5_DISK" 2>/dev/null | awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ { print $NF, $1 }'
-}
-
 # part_table: "NAME NR START SIZE" (sectors) per GPT entry, the format of
-# tools/printer/phase0.sh's partmap.txt.
+# tools/printer/phase0.sh's partmap.txt, from the fdisk -l listing stock's
+# mmc_name_to_dev parses (NR START END SIZE NAME; name last).
 part_table() {
 	"$C5_FDISK" -l "$C5_DISK" 2>/dev/null | awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ { print $NF, $1, $2, $3 - $2 + 1 }'
-}
-
-# part_dev NAME -> /dev/mmcblk0pN; fails when NAME is not unique or absent.
-part_dev() {
-	pd_nr=$(part_map | awk -v n="$1" '$1 == n { print $2; c++ } END { if (c != 1) exit 1 }') || return 1
-	[ -n "$pd_nr" ] || return 1
-	echo "${C5_DISK}p$pd_nr"
-}
-
-# part_bytes DEV -> size in bytes (sysfs counts 512-byte sectors).
-part_bytes() {
-	pb_sz=$(cat "$C5_SYSBLOCK/${1##*/}/size" 2>/dev/null) || return 1
-	case "$pb_sz" in '' | *[!0-9]*) return 1 ;; esac
-	echo $((pb_sz * 512))
-}
-
-slot_kname() { if [ "$1" = 2 ]; then echo kernel2; else echo kernel; fi; }
-slot_rname() { if [ "$1" = 2 ]; then echo rootfs2; else echo rootfs; fi; }
-other_slot() { if [ "$1" = 2 ]; then echo 1; else echo 2; fi; }
-
-cmdline_root() { sed -n 's/.*[[:space:]]root=\([^[:space:]]*\).*/\1/p; s/^root=\([^[:space:]]*\).*/\1/p' "$C5_CMDLINE" | head -n 1; }
-
-# own_slot -> 1 | 2 for the running root= device; fails otherwise.
-own_slot() {
-	os_root=$(cmdline_root)
-	[ -n "$os_root" ] || return 1
-	[ "$os_root" = "$(part_dev rootfs)" ] && { echo 1; return 0; }
-	[ "$os_root" = "$(part_dev rootfs2)" ] && { echo 2; return 0; }
-	return 1
-}
-
-is_mounted() { awk -v d="$1" '$1 == d { f = 1 } END { exit !f }' "$C5_MOUNTS"; }
-
-# --- boot flag (first sector of the ota partition) ---------------------------
-
-flag_read() {
-	fr_dev=$(part_dev ota) || return 1
-	head -c 11 "$fr_dev" | tr -d '\000\n'
-}
-
-# The SPL boots slot 2 only when the first 11 bytes are "ota:kernel2".
-flag_slot() {
-	fs_val=$(flag_read) || return 1
-	if [ "$fs_val" = "ota:kernel2" ]; then echo 2; else echo 1; fi
-}
-
-# flag_write SLOT: whole 512-byte sector, NUL padded, then read back.
-flag_write() {
-	case "$1" in 1) fw_s=ota:kernel ;; 2) fw_s=ota:kernel2 ;; *) return 1 ;; esac
-	fw_dev=$(part_dev ota) || return 1
-	printf '%s' "$fw_s" | dd of="$fw_dev" bs=512 count=1 conv=sync,fsync,notrunc 2>/dev/null || return 1
-	drop_caches
-	[ "$(flag_read)" = "$fw_s" ]
 }
 
 # flag_ensure_own SLOT: before writing any partition, the boot flag must name
 # the running slot, so a power loss mid-write still boots stock.
 flag_ensure_own() {
-	fe_now=$(flag_slot) || return 1
+	fe_now=$(c5_flag_slot)
 	[ "$fe_now" = "$1" ] && return 0
-	log "flag: boot flag names slot $fe_now ('$(flag_read)') but slot $1 is running; pointing it back at slot $1 before writing"
-	flag_write "$1" || { log "flag: write to slot $1 FAILED (now '$(flag_read)')"; return 1; }
-	log "flag: boot flag -> slot $1 ('$(flag_read)')"
+	log "flag: boot flag names slot $fe_now ('$(c5_flag_read)') but slot $1 is running; pointing it back at slot $1 before writing"
+	c5_flag_write "$1" || { log "flag: write to slot $1 FAILED (now '$(c5_flag_read)')"; return 1; }
+	log "flag: boot flag -> slot $1 ('$(c5_flag_read)')"
 }
 
 # --- images and checksums ------------------------------------------------------
 
-# magic_hex FILE -> first 4 bytes as lowercase hex
-magic_hex() { head -c 4 "$1" 2>/dev/null | hexdump -ve '1/1 "%02x"'; }
+# magic_str FILE -> first 4 bytes (slot.sh's c5_magic_hex gives them as hex)
 magic_str() { head -c 4 "$1" 2>/dev/null; }
 
 file_bytes() { wc -c < "$1" | tr -d ' '; }

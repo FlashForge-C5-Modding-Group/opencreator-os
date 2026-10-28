@@ -73,7 +73,7 @@ echo "demo: eMMC image on $LOOP, userdata on $DEMO/data"
 
 rc=0
 "$APP" --log "$DEMO/app.log" -- sudo -n env C5_DISK="$LOOP" C5_FDISK="$REPO/tools/demo/fdisk-compat.sh" \
-	C5_SFDISK="$(command -v sfdisk)" C5_PARTX="$(command -v partx)" C5_DATA="$DEMO/data" C5_CMDLINE="$DEMO/cmdline" C5_UNAME_R=5.10.186+ \
+	C5_SFDISK="$(command -v sfdisk)" C5_PARTX="$(command -v partx)" C5_DATA="$DEMO/data" C5_CMDLINE_FILE="$DEMO/cmdline" C5_UNAME_R=5.10.186+ \
 	C5_WPA="$DEMO/wpa_supplicant.conf" C5_REBOOT="$DEMO/fake-reboot.sh" C5_DROP_CACHES=/dev/null \
 	sh "$DEMO/stick/opencreator-os/install.sh" --from-stick "$DEMO/stick" --hook --ui Creator5Pro 0029 || rc=$?
 echo "demo: app exited with $rc; log in $DEMO/app.log"

@@ -59,12 +59,13 @@ Not a spec. Labels: **Observed** (seen on the printer or in a stock file),
   use headless installer actions there for now. Stock has
   `resize2fs`, `e2fsck`, `mkfs.ext4` and `partprobe`; it has no GPT editor, so
   the stick carries static util-linux `sfdisk` (GPT rewrite, backup header at
-  the disk end) and `partx` (tells the kernel through `BLKPG`), built by
+  the disk end) and `partx` (tells the kernel through `BLKPG`, and finds
+  partitions by GPT name for `slot.sh`), built by
   `installer/tools/build.sh`. If the kernel still shows the old table, the
   installer reboots once and continues.
 - **Decided:** PC demo = the SDL build under WSLg running the real backend
   against a sparse disk image laid out like the printer's eMMC, through the
-  backend's path overrides (`C5_DISK`, `C5_SYSBLOCK`, `C5_CMDLINE`, ...).
+  backend's path overrides (`C5_DISK`, `C5_SYSBLOCK`, `C5_CMDLINE_FILE`, ...).
   The jump into OpenWrt is not part of the demo (QEMU covers it).
   `libsdl2-dev` (2.30.0) is installed in WSL.
 - **Decided:** the same install stick runs from OpenWrt's boot-time USB hook.
