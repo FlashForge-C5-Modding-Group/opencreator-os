@@ -1,12 +1,17 @@
 From: OpenCreator
 Subject: [PATCH] fbdev: ingenic: bring up the Creator5Pro KX070 panel
 
-Register the always-powered 480x800 LVDS panel using stock 45 Hz timings,
-VESA 24-bit mapping and zero signal polarities. Keep the supported 30 MHz
-PHY/EPLL lookup separate from the active mode's DPU clock request.
+Register the always-powered 480x800 LVDS panel with the timings and clock
+a running stock system programs: 31 MHz pixel clock, horizontal
+sync/back/front 20/40/40, vertical 8/17/70, VESA 24-bit mapping and zero
+signal polarities. The DPU divider, EPLL and LVDS PHY PLL all use the same
+31 MHz table entry, as the SDK intends; the serializer PLL runs from the
+crystal, so a DPU pixel clock that differs from it breaks the picture.
 
 Carry the X2600 cold-start LPCDR handshake and prevent fbcon from starting
-RDMA before display setup. No panel init blob or power GPIOs are needed.
+RDMA before display setup. Replace the PHY post-divider instead of ORing
+it in, so a DPU left running by stock (chainload) is reprogrammed. No panel
+init blob or power GPIOs are needed.
 
 ---
 diff --git a/module_drivers/drivers/video/fbdev/ingenic/displays/Kconfig b/module_drivers/drivers/video/fbdev/ingenic/displays/Kconfig
@@ -20,7 +25,7 @@ diff --git a/module_drivers/drivers/video/fbdev/ingenic/displays/Kconfig b/modul
 +	tristate "Creator5Pro KX070 LVDS panel"
 +	depends on FB_INGENIC_DISPLAYS_STAGE && FB_INGENIC_STAGE && SOC_X2600
 +	help
-+	  Native 480x800, 45 Hz KX070 panel on the FlashForge Creator5Pro.
++	  Native 480x800 LVDS KX070 panel on the FlashForge Creator5Pro.
 +	  The panel is always powered; its backlight is controlled separately.
  
  
@@ -37,7 +42,7 @@ diff --git a/module_drivers/drivers/video/fbdev/ingenic/displays/panel-kx070.c b
 new file mode 100644
 --- /dev/null
 +++ b/module_drivers/drivers/video/fbdev/ingenic/displays/panel-kx070.c
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,78 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +#include <linux/module.h>
 +#include <linux/of.h>
@@ -47,24 +52,27 @@ new file mode 100644
 +
 +static struct fb_videomode kx070_mode = {
 +	.name = "kx070",
-+	.refresh = 45,
 +	.xres = 480,
 +	.yres = 800,
-+	/* The SDK derives pixclock from refresh and the complete timings. */
-+	.left_margin = 50,
-+	.right_margin = 30,
-+	.hsync_len = 10,
-+	.upper_margin = 20,
-+	.lower_margin = 20,
-+	.vsync_len = 6,
++	/*
++	 * Stock's running DPU: 580x895 total at 31 MHz, about 59.7 Hz. The
++	 * SDK derives refresh from pixclock when refresh is zero.
++	 */
++	.pixclock = KHZ2PICOS(31000),
++	.left_margin = 40,
++	.right_margin = 40,
++	.hsync_len = 20,
++	.upper_margin = 17,
++	.lower_margin = 70,
++	.vsync_len = 8,
 +	.sync = 0,
 +	.vmode = FB_VMODE_NONINTERLACED,
 +};
 +
 +static struct jzdsi_data kx070_dsi = {
 +	.modes = &kx070_mode,
-+	/* Supported PHY/EPLL table entry, not the DPU pixel clock. */
-+	.video_config.pixel_clock = 30000,
++	/* EPLL and LVDS PHY PLL table entry; also the DPU pixel clock. */
++	.video_config.pixel_clock = 31000,
 +	.video_config.color_coding = COLOR_CODE_24BIT,
 +	.video_config.data_en_polarity = 0,
 +	.video_config.h_polarity = 0,
@@ -142,7 +150,7 @@ diff --git a/module_drivers/drivers/video/fbdev/ingenic/fb_stage/dpu_ctrl.c b/mo
  
  	tft_cfg = reg_read(dctrl, DC_TFT_CFG);
  	if (tft_config->de_dl) {
-@@ -1284,18 +1297,20 @@
+@@ -1284,18 +1297,18 @@
  	struct clk *pclk_parent;
  	int i = 0;
  	pclk_rate =  dctrl->panel->dsi_pdata->video_config.pixel_clock * 1000;
@@ -160,12 +168,10 @@ diff --git a/module_drivers/drivers/video/fbdev/ingenic/fb_stage/dpu_ctrl.c b/mo
  	pclk_parent = clk_get(NULL, "epll");
  	clk_set_rate(pclk_parent, pclk_epll_tab[i].pll_freq);
  	clk_set_parent(clk_get(NULL, "mux_lcd"), pclk_parent);
-+	/* The PHY table selects EPLL; the active mode sets the DPU divider. */
-+	pclk_rate = PICOS2KHZ(dctrl->active_video_mode->pixclock) * 1000;
  	clk_set_rate(dctrl->pclk, pclk_rate);
  	return 0;
  #else
-@@ -1362,6 +1377,11 @@
+@@ -1362,6 +1375,11 @@
  
  int dpu_ctrl_rdma_change(struct dpu_ctrl *dctrl, int frame)
  {
@@ -177,3 +183,15 @@ diff --git a/module_drivers/drivers/video/fbdev/ingenic/fb_stage/dpu_ctrl.c b/mo
  	/* TODO: 可能改变的内容，包括格式，大小等。这里只是切换frame, 什么时候真正切换还不一定.*/
  
  	/*如果此时正处于直通显示, 需要停止直通，切换到rdma通道.*/
+diff --git a/module_drivers/drivers/video/fbdev/ingenic/jz_mipi_dsi/jz_mipi_dsi_phy.c b/module_drivers/drivers/video/fbdev/ingenic/jz_mipi_dsi/jz_mipi_dsi_phy.c
+--- a/module_drivers/drivers/video/fbdev/ingenic/jz_mipi_dsi/jz_mipi_dsi_phy.c
++++ b/module_drivers/drivers/video/fbdev/ingenic/jz_mipi_dsi/jz_mipi_dsi_phy.c
+@@ -672,6 +672,8 @@
+ 
+ 		//S2-1 set postdiv
+ 		temp = readl((unsigned int *)(dsi->phy_address + DSI_PHY_ANA_REG1E));
++		/* Replace it: a DPU left running by stock carries postdiv 3 here. */
++		temp &= ~0x3;
+ 		temp |= (postdiv << 0);
+ 		writel(temp, (unsigned int *)(dsi->phy_address + DSI_PHY_ANA_REG1E));
+ 		printk("DSI_PHY_ANA_REG1E : 0x%x\n", *(unsigned int *)(dsi->phy_address + DSI_PHY_ANA_REG1E));
