@@ -6,7 +6,9 @@
 #   menu=N                         answer to MENU main (default 1)
 #   confirm_<id>=ok|early|cancel   ok: wait out the button delay, then ok;
 #                                  early: ok at once; cancel (default ok)
-# BLOCK ends this script, which closes the installer's stdin.
+# BLOCK with a button ("TEXT|BUTTON") taps it: exit 1, as the app does;
+# BLOCK without one ends this script with 0 (the app would stay up until
+# power-off). Either closes the installer's stdin.
 conf=$(dirname "$0")/ui.conf
 get() { sed -n "s/^$1=//p" "$conf" 2>/dev/null | tail -n 1; }
 
@@ -29,6 +31,9 @@ while IFS= read -r line; do
 		*) printf 'ANSWER %s cancel\n' "$2" ;;
 		esac
 		;;
-	BLOCK) exit 0 ;;
+	BLOCK)
+		case "$line" in *'|'*) printf 'QEMU-UI-TAP %s\n' "${line##*|}" > /dev/console; exit 1 ;; esac
+		exit 0
+		;;
 	esac
 done

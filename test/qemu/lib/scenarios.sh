@@ -91,8 +91,9 @@ flow_install() { # NAME [make-install-stick options]
 	boot "$name" "$DISK" "$(spl_root "$DISK")" "$st" "$RUN/stick-$name.img"
 }
 
-# OpenWrt installed with a --chainload stick and committed by its first
-# (chainloaded) boot. Cached per run in $RUNROOT/committed.img.
+# OpenWrt installed with a default stick (first install: chainload test) and
+# committed by its first (chainloaded) boot. Cached per run in
+# $RUNROOT/committed.img.
 prepare_committed() {
 	local c=$RUNROOT/committed.img st
 	if [ -s "$c" ]; then
@@ -100,8 +101,8 @@ prepare_committed() {
 		say "setup: copied the committed OpenWrt image from an earlier scenario"
 		return 0
 	fi
-	say "setup: install with --chainload and commit (stock boot + OpenWrt boot)"
-	flow_install setup-install --chainload || return 1
+	say "setup: install and commit (stock boot + chainloaded OpenWrt boot)"
+	flow_install setup-install || return 1
 	[ "$(boot_outcome setup-install)" = "chainload:$OWRT_ROOT" ] ||
 		{ fatal "setup: no chainload to $OWRT_ROOT (outcome $(boot_outcome setup-install))"; return 1; }
 	st=$RUN/setup-openwrt.steps
@@ -113,14 +114,15 @@ prepare_committed() {
 
 # ------------------------------------------------------------- scenarios --
 
-# S1: default install from the stock USB hook.
+# S1: default (headless) install from the stock USB hook; no good kernel yet,
+# so it ends in a chainload test boot of slot 1.
 scenario_S1() {
 	new_disk
 	flow_install s1-stock || return 0
 	local ow=/opencreator-os used off
-	check "stock ran the stick hook and continued booting (hook exit != 0)" log_has s1-stock '^QEMU-STOCK-HOOK continue'
-	check "installer reported success" log_has s1-stock 'install: OK; slot 1 written'
-	check "boot ended in a power-off (no reboot, no stall)" is_eq "$(boot_outcome s1-stock)" poweroff
+	check "installer reported success" log_has s1-stock 'install: OK; slot 1 written and verified'
+	check "plan: chainload test boot afterwards" log_has s1-stock 'check: afterwards: chainload test boot \(root=/dev/mmcblk0p2\)'
+	check "boot ended in the chainload jump to slot 1" is_eq "$(boot_outcome s1-stock)" "chainload:$OWRT_ROOT"
 	check "boot flag unchanged ('ota:kernel2\\n')" is_eq "$(img_flag_hex "$DISK")" "$(img_flag_hex "$BASE_DISK")"
 	check "p1 kernel = kernel.uimage" is_eq "$(img_part_sum "$DISK" 1 "$OW_K_LEN")" "$OW_K_SUM"
 	check "p2 rootfs = root.squashfs" is_eq "$(img_part_sum "$DISK" 2 "$OW_SQ_LEN")" "$OW_SQ_SUM"
@@ -137,16 +139,17 @@ SSID='QEMU Test Net'
 PSK='qemu-psk-'\\''quoted'\\''-123'"
 	check "install.state = written slot=1" bash -c "debugfs -R 'cat $ow/install.state' '$(userdata_spec "$DISK")' 2>/dev/null | grep -q '^written slot=1 kernel=/dev/mmcblk0p1 rootfs=/dev/mmcblk0p2 '"
 	check "chainload files copied to userdata" bash -c "for f in chainload.ko c5-chainload.sh kernel.uimage; do debugfs -R \"stat $ow/chainload/\$f\" '$(userdata_spec "$DISK")' 2>/dev/null | grep -q '^Inode:' || exit 1; done"
-	check "install log on the stick ends with the 'next:' hints" bash -c "mtype -i '$RUN/stick-s1-stock.img@@1M' ::opencreator-os-install.log | grep -q 'next: or switch for real'"
+	check "chainload kernel = slot 1's uImage" is_eq "$(data_cat "$DISK" $ow/chainload/kernel.uimage | sha256sum | cut -d' ' -f1)" "$OW_K_SUM"
+	check "install log on the stick ends with the jump" bash -c "mtype -i '$RUN/stick-s1-stock.img@@1M' ::opencreator-os-install.log | grep -q 'chainload: staged; jumping into OpenWrt'"
 	check "hook model stored on c5os" is_eq "$(c5os_cat "$DISK" $ow/model)" "Creator5Pro 0029"
 	check "credentials not copied to userdata" bash -c "! debugfs -R 'stat $ow/wifi.conf' '$(userdata_spec "$DISK")' 2>/dev/null | grep -q '^Inode:'"
 	check "first install has matching pending commit" is_eq "$(c5os_cat "$DISK" $ow/pending-commit)" "slot=1"
 }
 
-# S2: install with CHAINLOAD -> fake jump -> OpenWrt from p2, committed.
+# S2: default install -> fake jump -> OpenWrt from p2, committed.
 scenario_S2() {
 	new_disk
-	flow_install s2-stock --chainload || return 0
+	flow_install s2-stock || return 0
 	check "stock hook staged and jumped to root=$OWRT_ROOT" is_eq "$(boot_outcome s2-stock)" "chainload:$OWRT_ROOT"
 	check "chainload staged slot 1's own kernel (no c5.nocommit)" log_lacks s2-stock '^QEMU-CHAINLOAD .*c5\.nocommit=1'
 	check "boot flag still ota:kernel2 after the install" is_eq "$(img_flag "$DISK")" ota:kernel2
@@ -577,7 +580,8 @@ scenario_S9() {
 	st=$RUN/s9-again.steps
 	steps_stock "$st"
 	boot s9-again "$DISK" "$(spl_root "$DISK")" "$st" "$RUN/stick-s9.img"
-	check "stock booted and the hook finished the install" log_has s9-again 'install: OK; slot 1 written'
+	check "stock booted and the hook finished the install" log_has s9-again 'install: OK; slot 1 written and verified'
+	check "the finished install test-boots slot 1" is_eq "$(boot_outcome s9-again)" "chainload:$OWRT_ROOT"
 	check "p1 kernel = kernel.uimage" is_eq "$(img_part_sum "$DISK" 1 "$OW_K_LEN")" "$OW_K_SUM"
 	check "p2 rootfs = root.squashfs" is_eq "$(img_part_sum "$DISK" 2 "$OW_SQ_LEN")" "$OW_SQ_SUM"
 	check "install-pending removed" bash -c "! debugfs -R 'stat /opencreator-os/install-pending' '$(userdata_spec "$DISK")' 2>/dev/null | grep -q '^Inode:'"
@@ -606,7 +610,7 @@ scenario_S12() {
 	data_put "$DISK" "$RUN/keep.txt" /qemu-keep.txt || { fatal "cannot put the marker on userdata"; return 0; }
 	cp --sparse=always "$DISK" "$RUN/before.img"
 	local before=$RUN/before.img stick=$RUN/stick-s12.img bk=$RUN/bk name sum got want n start size st
-	make_ui_payload "$RUN/payload-s12" "menu=1 confirm_backup=ok confirm_c5os=ok" --chainload ||
+	make_ui_payload "$RUN/payload-s12" "menu=1 confirm_backup=ok confirm_c5os=ok" ||
 		{ fatal "make-install-stick.sh failed: $(tail -n 2 "$RUN/make-install-stick.log" | tr '\n' ' ')"; return 0; }
 	printf "SSID='QEMU Stick Override'\nPSK='stick-override-123'\n" > "$RUN/payload-s12/opencreator-os/wifi.conf"
 	echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f qemu-fixture' > "$RUN/payload-s12/opencreator-os/authorized_keys"
@@ -697,7 +701,8 @@ scenario_S13() {
 	stick=$RUN/stick-s13a.img
 	make_stick "$RUN/payload-s13a" "$stick"
 	ui_stock_boot s13-full "$stick"
-	check "full userdata: blocked before the menu" log_has s13-full '^QEMU-UI BLOCK c5os-space Please free [0-9]+ MB on /usr/data'
+	check "full userdata: blocked before the menu, with Boot to stock" log_has s13-full '^QEMU-UI BLOCK c5os-space Please free [0-9]+ MB on /usr/data.*Tap Boot to stock.*\|Boot to stock'
+	check "full userdata: Boot to stock tapped" log_has s13-full '^QEMU-UI-TAP Boot to stock'
 	check "full userdata: no menu" log_lacks s13-full '^QEMU-UI MENU '
 	check "full userdata: stock continued" log_has s13-full '^QEMU-STOCK-HOOK continue'
 	check "full userdata: GPT unchanged" is_eq "$(gpt_layout "$DISK")" "$base_gpt"
@@ -745,19 +750,29 @@ EOF
 	done
 }
 
-# S14: Swap from the menu: stock -> OpenWrt, OpenWrt flag -> stock, and the
-# disabled item when nothing is installed.
+# S14: stock-side Swap and reinstall. Swap to OpenWrt with an untested
+# kernel test-boots it (recreating pending-commit) and the healthy boot
+# commits; Swap to stock; the disabled item when nothing is installed. A
+# headless stick that already started OpenWrt does not again; the same build
+# reinstalled from the app flips directly (known-good kernel).
 scenario_S14() {
 	local stick=$RUN/stick-s14.img st
 	new_disk
 	flow_install s14-install || return 0
-	check "install left the flag on stock" is_eq "$(img_flag "$DISK")" ota:kernel2
+	check "install test-booted slot 1, flag left on stock" is_eq "$(boot_outcome s14-install):$(img_flag "$DISK")" "chainload:$OWRT_ROOT:ota:kernel2"
+	c5os_rm "$DISK" /opencreator-os/pending-commit
 	make_ui_payload "$RUN/payload-s14" "menu=2" || { fatal "make-install-stick.sh failed"; return 0; }
 	make_stick "$RUN/payload-s14" "$stick"
 	ui_stock_boot s14-a "$stick"
 	check "menu offers Swap to OpenWrt" bash -c "[[ \"\$1\" == *'|Swap to OpenWrt|-Uninstall (not yet available)' ]]" _ "$(ui_menu_line s14-a)"
-	check "swap rebooted" is_eq "$(boot_outcome s14-a)" reboot
-	check "flag -> OpenWrt (ota:kernel)" is_eq "$(img_flag "$DISK")" ota:kernel
+	check "untested kernel: swap test-boots slot 1" is_eq "$(boot_outcome s14-a)" "chainload:$OWRT_ROOT"
+	check "swap staged slot 1's own kernel (no c5.nocommit)" log_lacks s14-a '^QEMU-CHAINLOAD .*c5\.nocommit=1'
+	check "swap recreated pending-commit for slot 1" is_eq "$(c5os_cat "$DISK" /opencreator-os/pending-commit)" "slot=1"
+	check "flag stays on stock until the test boot commits" is_eq "$(img_flag "$DISK")" ota:kernel2
+	st=$RUN/s14-a-openwrt.steps
+	steps_openwrt "$st" < /dev/null
+	boot s14-a-openwrt "$DISK" "$(chainload_cmdline s14-a)" "$st"
+	check "healthy test boot committed: flag -> OpenWrt (ota:kernel)" is_eq "$(img_flag "$DISK")" ota:kernel
 
 	# stock running while the flag names OpenWrt (e.g. after a fallback)
 	st=$RUN/s14-b.steps
@@ -774,11 +789,20 @@ scenario_S14() {
 	check "nothing installed: swap refused" bash -c "mtype -i '$stick@@1M' ::opencreator-os-install.log | grep -q 'abort: swap: OpenWrt is not installed'"
 	check "nothing installed: flag unchanged" is_eq "$(img_flag_hex "$DISK")" "$(img_flag_hex "$C5OS_DISK")"
 	check "nothing installed: p1/p2 untouched" is_eq "$(img_part_sum "$DISK" 1 $((PSIZE[1] * 512)))$(img_part_sum "$DISK" 2 $((PSIZE[2] * 512)))" "$BASE_P1$BASE_P2"
+
+	# committed OpenWrt, stock selected again; the stick that installed it
 	new_disk
 	prepare_committed || return 0
 	printf 'ota:kernel2\n' | dd of="$DISK" bs=512 seek="${PSTART[5]}" conv=sync,notrunc status=none
-	flow_install s14-reinstall --chainload || return 0
-	check "same-build reinstall skips chainload test" log_has s14-reinstall 'chainload: kernel matches c5os good-kernel; test boot skipped'
+	flow_install s14-again || return 0
+	check "headless: this stick already started OpenWrt, not again" log_has s14-again 'switch: this stick already started OpenWrt in slot 1'
+	check "headless retry: no chainload, no reboot" is_eq "$(boot_outcome s14-again)" poweroff
+	check "headless retry: stock continued" log_has s14-again '^QEMU-STOCK-HOOK continue'
+	check "headless retry: flag stays on stock" is_eq "$(img_flag "$DISK")" ota:kernel2
+	make_ui_payload "$RUN/payload-s14-re" "menu=1 confirm_backup=cancel" || { fatal "make-install-stick.sh failed"; return 0; }
+	make_stick "$RUN/payload-s14-re" "$RUN/stick-s14-re.img"
+	ui_stock_boot s14-reinstall "$RUN/stick-s14-re.img"
+	check "same-build reinstall: known-good kernel, no test boot" log_has s14-reinstall 'switch: slot 1 kernel matches c5os good-kernel; no test boot'
 	check "same-build reinstall never chainloads" log_lacks s14-reinstall '^QEMU-CHAINLOAD '
 	check "same-build reinstall directly selects OpenWrt" is_eq "$(boot_outcome s14-reinstall):$(img_flag "$DISK")" reboot:ota:kernel
 }
