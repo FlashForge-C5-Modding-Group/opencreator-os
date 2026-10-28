@@ -1,5 +1,9 @@
 #!/bin/sh
 # shellcheck disable=SC1091
+# Runs the stick's runFirmwareExe.sh (START=19). While the outcome of an
+# installer test boot is open (chainloaded test boot, or last-test still
+# "started" after a flip) the hook waits for it: c5-booted runs it again
+# with "now" once it decided, so the installer sees the committed result.
 
 . /lib/c5/slot.sh
 
@@ -12,6 +16,12 @@ case "$machine $pid" in
 	'Creator5Pro 0029'|'Creator5 0028') ;;
 	*) logger -t c5-usb-hook "invalid stored model; skipping USB hook"; exit 0 ;;
 esac
+
+if [ "${1:-}" != now ] && { c5_test_boot || grep -q '^started ' "$C5_OCDIR/last-test" 2>/dev/null; }; then
+	logger -t c5-usb-hook "test boot outcome pending; USB hook deferred until c5-booted"
+	: > /tmp/c5-usb-hook.deferred
+	exit 0
+fi
 
 mkdir -p /mnt
 for dev in /dev/sd[a-z][0-9]* /dev/sd[a-z]; do

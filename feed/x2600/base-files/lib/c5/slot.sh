@@ -13,7 +13,9 @@
 # the SPL compares the first 11 bytes), c5os = OpenWrt's /data.
 #
 # Overridable for testing: C5_DISK, C5_PARTX, C5_CMDLINE_FILE, C5_SYSBLOCK,
-# C5_KMSG, C5_MOUNTS, C5_DROP_CACHES, C5_DATA, C5_OCDIR, C5_UDATA.
+# C5_KMSG, C5_MOUNTS, C5_DROP_CACHES, C5_DATA, C5_OCDIR, C5_UDATA,
+# C5_TEST_DEADLINE (also from the kernel command line: the kernel passes
+# C5_TEST_DEADLINE=N to init's environment).
 
 C5_DISK=${C5_DISK:-/dev/mmcblk0}
 C5_PARTX=${C5_PARTX:-partx}
@@ -37,6 +39,11 @@ C5_TRIES_SECTOR=384
 C5_TRIES_MAGIC=C5TRIES1
 # shellcheck disable=SC2034  # read by the preinit hook
 C5_TRIES_MAX=3
+# Test boot (chainloaded from stock, flag on stock): seconds after preinit
+# until it must be healthy (c5-booted), else it fails back to stock.
+case "${C5_TEST_DEADLINE:-}" in '' | *[!0-9]*) C5_TEST_DEADLINE=180 ;; esac
+# c5-booted and the deadline both mkdir this; the first one decides.
+C5_TEST_DECIDED=/tmp/c5-test.decided
 
 # $1 = GPT partition name -> /dev/mmcblk0pN (return 1 if unknown)
 c5_part_dev() {
@@ -306,4 +313,58 @@ c5_stock_blocker() {
 	fi
 	c5_slot_bootable "$s" || { echo "stock slot $s has no uImage kernel / squashfs root"; return 0; }
 	return 1
+}
+
+# Test boot: the root is an eMMC slot the flag does not name, so stock
+# chainloaded it (the SPL boots only the flagged slot).
+c5_test_boot() {
+	local own
+	own=$(c5_own_slot) && [ "$(c5_flag_slot)" != "$own" ]
+}
+
+# Version of the running image (the build's git describe).
+c5_version() (
+	# shellcheck disable=SC1091  # on the target
+	. /etc/openwrt_release 2>/dev/null
+	echo "${DISTRIB_RELEASE:-unknown}"
+)
+
+# c5os opencreator-os/last-test: "started VERSION" (the stock installer,
+# before it boots OpenWrt), then "ok VERSION" or "failed VERSION REASON"
+# (OpenWrt). The installer renames it to last-test.seen once it told the user.
+# Runs with c5os mounted at /tmp/c5-test (c5_with_part): $1 = the line;
+# "failed ..." also removes pending-commit, so nothing commits that build.
+c5_test_record() {
+	local d=/tmp/c5-test/opencreator-os
+	mkdir -p "$d" || return 1
+	case "$1" in
+	failed*) rm -f "$d/pending-commit"; [ ! -e "$d/pending-commit" ] || return 1 ;;
+	esac
+	printf '%s\n' "$1" > "$d/last-test.new" && mv -f "$d/last-test.new" "$d/last-test"
+}
+
+# A test boot failed ($* = reason): flag -> stock (written and read back),
+# last-test "failed ..." and no pending-commit on c5os, reboot -f. Writes
+# nothing else: no stock partition, no stock-invalid mark.
+c5_test_fail() {
+	local other
+	other=$(c5_other_slot)
+	if c5_flag_write "$other"; then
+		c5_bootlog "test: FAILED: $*; flag -> slot $other (stock)"
+	else
+		c5_bootlog "test: FAILED: $*; FLAG WRITE FAILED (flag now '$(c5_flag_read)')"
+	fi
+	c5_with_part c5os /tmp/c5-test rw,noatime c5_test_record "failed $(c5_version) $*" ||
+		c5_bootlog "test: recording last-test / removing pending-commit on c5os FAILED"
+	c5_bootlog "test: rebooting into stock"
+	sync
+	reboot -f
+}
+
+# Started in the background by preinit on a test boot: fails it unless
+# c5-booted found it healthy first.
+c5_test_deadline() {
+	sleep "$C5_TEST_DEADLINE"
+	mkdir "$C5_TEST_DECIDED" 2>/dev/null || return 0
+	c5_test_fail "not healthy within $C5_TEST_DEADLINE s"
 }

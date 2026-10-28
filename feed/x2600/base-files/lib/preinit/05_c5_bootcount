@@ -3,6 +3,9 @@
 #
 # Count consecutive boots before the overlay is mounted. Healthy boots
 # reset the counter in c5-booted; untested chainloaded kernels do not count.
+# A test boot (chainloaded from stock) is not counted either: it gets
+# C5_TEST_DEADLINE seconds to become healthy (c5-booted), else it fails
+# back to stock. The counter fallback records last-test on c5os.
 
 c5_bootcount() {
 	. /lib/c5/slot.sh
@@ -12,6 +15,12 @@ c5_bootcount() {
 		return 0
 	}
 	c5_bootlog_reset
+	if c5_test_boot; then
+		# outlives preinit (reparented to procd); the arguments name it in ps
+		sh -c '. /lib/c5/slot.sh; c5_test_deadline' c5-test-deadline < /dev/null > /dev/null 2>&1 &
+		c5_bootlog "bootcount: slot $own test boot$(c5_nocommit && echo ' (c5.nocommit=1)'); counter and flag untouched; healthy within $C5_TEST_DEADLINE s or back to stock"
+		return 0
+	fi
 	if c5_nocommit; then
 		c5_bootlog "bootcount: slot $own booting (c5.nocommit=1); counter and flag untouched"
 		return 0
@@ -26,6 +35,9 @@ c5_bootcount() {
 		other=$(c5_other_slot)
 		if c5_flag_write "$other"; then
 			c5_tries_write 0 || c5_bootlog "bootcount: counter reset FAILED"
+			c5_with_part c5os /tmp/c5-test rw,noatime c5_test_record \
+				"failed $(c5_version) boot counter: $C5_TRIES_MAX boots of slot $own did not become healthy" ||
+				c5_bootlog "bootcount: recording last-test / removing pending-commit on c5os FAILED"
 			c5_bootlog "bootcount: slot $own failed $C5_TRIES_MAX boots; flag -> slot $other (stock); rebooting"
 			reboot -f
 		else

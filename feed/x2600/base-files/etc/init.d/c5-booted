@@ -2,27 +2,37 @@
 # shellcheck disable=SC1091,SC3043,SC2034  # START is read by /etc/rc.common
 #
 # Reaching START=99 with c5os mounted is healthy. Reset failed boots,
-# commit a pending upgrade, and remember this slot's tested kernel.
+# commit a pending upgrade, and remember this slot's tested kernel. A test
+# boot (chainloaded from stock) that is not healthy fails back to stock at
+# once (c5_test_fail); a healthy one stops its preinit deadline. A committed
+# install records last-test "ok", then the USB hook it deferred runs.
 
 START=99
 
 c5_booted_check() {
 	. /lib/c5/slot.sh
-	local own logs="$C5_OCDIR/logs" pending="$C5_OCDIR/pending-commit" ver dev sum
+	local own test=0 committed=0 logs="$C5_OCDIR/logs" pending="$C5_OCDIR/pending-commit" ver dev sum
 
-	/usr/libexec/c5-wifi-sta
+	c5_test_boot && test=1
 	if ! own=$(c5_own_slot); then
 		c5_bootlog "booted: root $(c5_root_dev) is not an eMMC slot; flag untouched"
-	elif c5_nocommit; then
-		c5_bootlog "booted: chainloaded kernel is not slot $own's own kernel (c5.nocommit=1); flag untouched ('$(c5_flag_read)')"
 	elif ! c5_is_mountpoint "$C5_DATA"; then
 		c5_bootlog "booted: NOT healthy ($C5_DATA not mounted); flag stays '$(c5_flag_read)'"
+		if [ "$test" = 1 ] && mkdir "$C5_TEST_DECIDED" 2>/dev/null; then
+			c5_test_fail "c5os not mounted at $C5_DATA"
+		fi
+	elif [ "$test" = 1 ] && ! mkdir "$C5_TEST_DECIDED" 2>/dev/null; then
+		c5_bootlog "booted: healthy, but the test deadline expired first"
+		return 0
+	elif c5_nocommit; then
+		c5_bootlog "booted: chainloaded kernel is not slot $own's own kernel (c5.nocommit=1); flag untouched ('$(c5_flag_read)')"
 	else
 		c5_tries_write 0 || c5_bootlog "booted: counter reset FAILED"
 		if [ -f "$pending" ] && [ "$(sed -n 's/^slot=//p' "$pending")" = "$own" ]; then
 			if c5_flag_write "$own"; then
 				ver=$(sed -n 's/^version=//p' "$pending")
 				rm -f "$pending"
+				committed=1
 				c5_bootlog "booted: committed sysupgrade ${ver:-?} in slot $own; flag -> slot $own (OpenWrt)"
 			else
 				c5_bootlog "booted: FLAG WRITE FAILED; flag stays '$(c5_flag_read)'"
@@ -36,14 +46,30 @@ c5_booted_check() {
 		else
 			c5_bootlog "booted: slot $own healthy; recording good kernel FAILED"
 		fi
+		# the installer started this boot (install, swap) and it is committed
+		if { [ "$committed" = 1 ] || grep -q '^started ' "$C5_OCDIR/last-test" 2>/dev/null; } &&
+			[ "$(c5_flag_slot)" = "$own" ]; then
+			if printf 'ok %s\n' "$(c5_version)" > "$C5_OCDIR/last-test.new" &&
+				mv -f "$C5_OCDIR/last-test.new" "$C5_OCDIR/last-test"; then
+				c5_bootlog "booted: last-test ok"
+			else
+				c5_bootlog "booted: writing last-test FAILED"
+			fi
+		fi
 	fi
 
-	c5_is_mountpoint "$C5_DATA" || return 0
-	mkdir -p "$logs"
-	dmesg > "$logs/dmesg-last.txt" 2>&1
-	logread > "$logs/logread-last.txt" 2>&1
-	c5_bootlog_show > "$logs/bootlog-last.txt"
-	sync
+	/usr/libexec/c5-wifi-sta
+	if c5_is_mountpoint "$C5_DATA"; then
+		mkdir -p "$logs"
+		dmesg > "$logs/dmesg-last.txt" 2>&1
+		logread > "$logs/logread-last.txt" 2>&1
+		c5_bootlog_show > "$logs/bootlog-last.txt"
+		sync
+	fi
+	if [ -f /tmp/c5-usb-hook.deferred ]; then
+		rm -f /tmp/c5-usb-hook.deferred
+		/usr/libexec/c5-usb-hook now
+	fi
 }
 
 boot() {
