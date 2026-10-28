@@ -1,7 +1,8 @@
 # shellcheck shell=sh
 # shellcheck disable=SC3043,SC2034  # busybox ash 'local'; C5_* results are read by callers
 #
-# Verified stock-slot repair for the installer. Source slot.sh first.
+# Verified stock-slot repair, sourced by install.sh on OpenWrt (Repair
+# stock) after lib.sh, which sources slot.sh.
 #
 # Functions print progress on stdout. On failure they set C5_WHY and return 1.
 #
@@ -22,8 +23,6 @@
 
 c5_why() { C5_WHY=$*; return 1; }
 
-c5_size_of() { wc -c < "$1" | tr -d ' '; }
-
 # DIR NAME: DIR/NAME must match its entry in DIR/SHA256SUMS (or MD5SUMS).
 # Sets C5_SUM (checksum tool) and C5_WANT (expected checksum).
 c5_verify_file() {
@@ -37,7 +36,7 @@ c5_verify_file() {
 		c5_why "no SHA256SUMS or MD5SUMS in $1"
 		return 1
 	fi
-	C5_WANT=$(awk -v f="$2" '{ n = $2; sub(/^\*/, "", n); sub(/^\.\//, "", n) } n == f { print $1; exit }' "$1/$list")
+	C5_WANT=$(sums_get "$1/$list" "$2")
 	[ -n "$C5_WANT" ] || { c5_why "$list in $1 does not list $2"; return 1; }
 	echo "checking $1/$2 against $list"
 	[ "$("$C5_SUM" < "$1/$2" | cut -d' ' -f1)" = "$C5_WANT" ] || { c5_why "$1/$2 does not match $list"; return 1; }
@@ -50,11 +49,9 @@ c5_check_target() {
 	[ "$1" != "$(c5_root_dev)" ] || { c5_why "$1 is the running root"; return 1; }
 	if c5_mounted "$1"; then c5_why "$1 is mounted"; return 1; fi
 	max=$(c5_part_bytes "$2") || { c5_why "cannot size $1"; return 1; }
-	sz=$(c5_size_of "$3")
+	sz=$(file_bytes "$3")
 	[ "$sz" -le "$max" ] || { c5_why "${3##*/} ($sz bytes) is larger than $1 ($max bytes)"; return 1; }
 }
-
-# The mark remains set until both stock-slot writes have verified.
 
 # Pin the running slot and mark stock invalid before writing.
 c5_stock_write_begin() {
@@ -70,7 +67,7 @@ c5_stock_write_begin() {
 # size-of-FILE bytes of DEV with SUM.
 c5_write_verified() {
 	local sz
-	sz=$(c5_size_of "$1")
+	sz=$(file_bytes "$1")
 	echo "writing ${1##*/} ($sz bytes) -> $2"
 	dd if="$1" of="$2" bs=1M conv=notrunc,fsync 2>/dev/null || { c5_why "writing $2 failed"; return 1; }
 	c5_drop_caches
@@ -79,13 +76,12 @@ c5_write_verified() {
 }
 
 # DIR DRY(0|1): write DIR/kernel.img and DIR/rootfs.squashfs into the slot
-# this system is not running from. Sets C5_STOCK_SLOT. With DRY=1 only the
-# checks run. The boot flag is left on the running slot.
+# this system is not running from. With DRY=1 only the checks run. The boot
+# flag is left on the running slot.
 c5_restore_stock() {
 	local dir="$1" own slot kdev rdev ksum rsum
 	own=$(c5_own_slot) || { c5_why "root $(c5_root_dev) is not an eMMC slot; cannot tell which slot is stock"; return 1; }
 	slot=$(c5_other_slot)
-	C5_STOCK_SLOT=$slot
 	kdev=$(c5_part_dev "$(c5_slot_kname "$slot")") || { c5_why "no $(c5_slot_kname "$slot") partition"; return 1; }
 	rdev=$(c5_part_dev "$(c5_slot_rname "$slot")") || { c5_why "no $(c5_slot_rname "$slot") partition"; return 1; }
 	c5_verify_file "$dir" kernel.img || return 1

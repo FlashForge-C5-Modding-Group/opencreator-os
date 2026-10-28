@@ -29,7 +29,7 @@
 #
 # Payload in DIR: kernel.uimage root.squashfs sysupgrade.tar VERSION
 # chainload/chainload.ko chainload/c5-chainload.sh SHA256SUMS MD5SUMS,
-# opencreator-os/slot.sh, opencreator-os/bin/sfdisk and bin/partx, optional
+# opencreator-os/slot.sh, restore.sh, bin/sfdisk and bin/partx, optional
 # opencreator-os/authorized_keys, opencreator-os/FLIP and opencreator-os/CHAINLOAD.
 set -u
 
@@ -879,8 +879,6 @@ do_install() {
 }
 
 openwrt_main() {
-	# shellcheck disable=SC1091
-	. /lib/c5/restore.sh
 	if [ "$UI" != 1 ] && [ -z "$ACTION" ]; then
 		log "install: no ACTION on OpenWrt; nothing to do"
 		return 0
@@ -917,6 +915,8 @@ openwrt_main() {
 	swap | repair-stock)
 		if [ "$ACTION" = repair-stock ]; then
 			ui_info repair-stock "Checking the saved stock slot..."
+			# shellcheck source-path=SCRIPTDIR source=restore.sh
+			. "$SELF_DIR/restore.sh"
 			# shellcheck disable=SC2153  # C5_UDATA comes from slot.sh
 			c5_with_part userdata "$C5_UDATA" ro,noload c5_restore_stock "$C5_UDATA/opencreator-os/stock" "$CHECK" ||
 				finish failed "Stock repair FAILED\n${C5_WHY:-Cannot restore stock.}" 1

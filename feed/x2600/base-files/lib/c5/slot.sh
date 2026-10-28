@@ -29,8 +29,8 @@ C5_UDATA=${C5_UDATA:-/tmp/c5-userdata}
 C5_BOOTLOG_SECTOR=128      # bootlog lives at 64 KiB inside the ota partition ...
 C5_BOOTLOG_SECTORS=128     # ... and is 64 KiB long
 C5_BOOTLOG_MAGIC=C5BOOTLOG1
-# Stock-invalid sector: restore.sh sets it before writing stock and clears
-# it after read-back. Never select stock while it is set.
+# Stock-invalid sector: the installer's restore.sh sets it before writing
+# stock and clears it after read-back. Never select stock while it is set.
 C5_STOCKINV_SECTOR=256
 C5_STOCKINV_MAGIC=C5STOCKINVALID1
 C5_TRIES_SECTOR=384

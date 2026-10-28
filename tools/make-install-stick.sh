@@ -55,7 +55,8 @@ die() { echo "make-install-stick: $*" >&2; exit 1; }
 for a in kernel.uimage root.squashfs sysupgrade.tar; do
 	[ -s "$VDIR/$PREFIX-$a" ] || die "missing $VDIR/$PREFIX-$a"
 done
-for f in installer/runFirmwareExe.sh installer/opencreator-os/install.sh installer/opencreator-os/lib.sh feed/x2600/base-files/lib/c5/slot.sh \
+for f in installer/runFirmwareExe.sh installer/opencreator-os/install.sh installer/opencreator-os/lib.sh \
+	installer/opencreator-os/restore.sh feed/x2600/base-files/lib/c5/slot.sh \
 	chainload/out/chainload.ko chainload/c5-chainload.sh \
 	installer/tools/out/sfdisk installer/tools/out/partx; do
 	[ -s "$REPO/$f" ] || die "missing $REPO/$f"
@@ -90,7 +91,8 @@ echo "kernel.uimage payload $KPAY of $CL_LIMIT bytes (chainload limit)"
 mkdir -p "$OUT/opencreator-os/bin" "$OUT/chainload"
 install -m 0755 "$REPO/installer/runFirmwareExe.sh" "$OUT/"
 install -m 0755 "$REPO/installer/opencreator-os/install.sh" "$OUT/opencreator-os/"
-install -m 0644 "$REPO/installer/opencreator-os/lib.sh" "$REPO/feed/x2600/base-files/lib/c5/slot.sh" "$OUT/opencreator-os/"
+install -m 0644 "$REPO/installer/opencreator-os/lib.sh" "$REPO/installer/opencreator-os/restore.sh" \
+	"$REPO/feed/x2600/base-files/lib/c5/slot.sh" "$OUT/opencreator-os/"
 install -m 0755 "$REPO/installer/tools/out/sfdisk" "$REPO/installer/tools/out/partx" "$OUT/opencreator-os/bin/"
 [ -z "$APP" ] || install -m 0755 "$APP" "$OUT/opencreator-os/os-installer"
 for a in kernel.uimage root.squashfs sysupgrade.tar; do

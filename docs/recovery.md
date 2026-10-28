@@ -148,7 +148,8 @@ the fixed fstab mounts only ext4 label `c5os` (`rw,noatime`).
 | Install stick: Update OpenWrt / Swap to stock / Repair stock | OpenWrt's USB hook; headless `opencreator-os/ACTION` | `tools/make-install-stick.sh` |
 | `c5-chainload.sh` + `chainload.ko` | stock, `/usr/data/opencreator-os/chainload/` | `install.sh` |
 | Stock-side restore stick (`opencreator-os-restore/`) | runs from stock's USB hook | `tools/make-restore-stick.sh` |
-| Slot, counter, boot-log and verified-repair shell helpers | OpenWrt, `/lib/c5/slot.sh` and `/lib/c5/restore.sh` | this repo |
+| Slot, counter and boot-log shell helpers | OpenWrt, `/lib/c5/slot.sh` (also on the install stick as `opencreator-os/slot.sh`) | this repo |
+| Verified stock-slot repair helpers | install stick, `opencreator-os/restore.sh` (needs the stick's `lib.sh` and `slot.sh`) | `tools/make-install-stick.sh` |
 | Ingenic USB cloner | PC, printer in boot-ROM USB mode | Ingenic (`DevSupport/Tools/USBBurner/cloner-latest-ubuntu.tar.gz`) |
 
 Before you rely on any of this, check the PC backup:
@@ -288,11 +289,13 @@ points at broken stock, see case 7.
 - If `userdata` or the saved copy is bad, copy the stock slot's images from
   the PC backup into `/data/stock-restore/` over SSH. Name them `kernel.img`
   and `rootfs.squashfs` and create a matching `SHA256SUMS` on the PC before
-  copying. The verified helper can check first, then repair:
+  copying. With the install stick mounted (`mount -t vfat /dev/sda1 /mnt`),
+  the verified helper can check first, then repair:
 
   ```sh
-  . /lib/c5/slot.sh
-  . /lib/c5/restore.sh
+  SELF_DIR=/mnt/opencreator-os
+  . "$SELF_DIR/lib.sh"
+  . "$SELF_DIR/restore.sh"
   c5_restore_stock /data/stock-restore 1 &&
       c5_restore_stock /data/stock-restore 0
   ```
@@ -307,13 +310,15 @@ Stock's kernel boots, but its userspace (including SSH and the USB hook,
 which live on `usershare`) does not. The installer's Repair stock action
 does **not** repair this partition. If OpenWrt is selected, restore over SSH.
 Copy `usershare.img` and a matching `SHA256SUMS` from the PC backup into
-`/data/usershare-restore/`, then on OpenWrt:
+`/data/usershare-restore/`, then, with the install stick mounted at `/mnt`
+as in case 5, on OpenWrt:
 
 ```sh
 (
     set -e
-    . /lib/c5/slot.sh
-    . /lib/c5/restore.sh
+    SELF_DIR=/mnt/opencreator-os
+    . "$SELF_DIR/lib.sh"
+    . "$SELF_DIR/restore.sh"
     dir=/data/usershare-restore
     dev=$(c5_part_dev usershare)
     c5_verify_file "$dir" usershare.img
