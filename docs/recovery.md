@@ -23,13 +23,14 @@ file; **Hypothesis** = not verified yet.
 ## Safety mechanisms
 
 **Chainload changed kernels first.** The stock installer writes OpenWrt into
-the spare slot and keeps the flag on stock for the RAM test. Under stock,
-`c5-chainload.sh stage /dev/mmcblk0pN` + `go` (or an install stick made with
-`tools/make-install-stick.sh --chainload`) loads the OpenWrt kernel with
-`chainload.ko` and jumps to it. The test follows a real slot write; it is not
-a zero-write test. If it hangs before committing, a power cycle brings
-stock back. A kernel whose SHA-256 matches `c5os`'s `good-kernel` can skip
-the RAM test and boot directly instead.
+the spare slot and keeps the flag on stock for the RAM test, which Install
+and Swap to OpenWrt then run (by hand under stock:
+`c5-chainload.sh stage /dev/mmcblk0pN` + `go`): `chainload.ko` loads the
+slot's OpenWrt kernel and jumps to it. The test follows a real slot write; it
+is not a zero-write test. If it hangs before committing, a power cycle brings
+stock back; a headless install stick left in does not start it again. A
+kernel whose SHA-256 matches `c5os`'s `good-kernel` skips the RAM test: the
+installer points the flag at it and reboots.
 
 **Three failed boots, then stock.**
 1. Early preinit (`05_c5_bootcount`) increments a counter in one `ota` sector
@@ -44,9 +45,10 @@ the RAM test and boot directly instead.
    not the entire padded partition). Wi-Fi, IPv4 and SSH are not health
    gates; a healthy printer may still be unreachable over the network.
 4. Only a `pending-commit` whose `slot=N` matches the running slot allows
-   `c5-booted` to select that slot and remove the marker. Stock installs and
-   changed-kernel sysupgrades create this marker. Healthy normal boots do
-   not change the flag, so they cannot undo a requested swap to stock.
+   `c5-booted` to select that slot and remove the marker. Stock-side test
+   boots (Install, Swap to OpenWrt) and changed-kernel sysupgrades create
+   this marker. Healthy normal boots do not change the flag, so they cannot
+   undo a requested swap to stock.
 
 The hardware watchdog is enabled in the kernel and fed by procd through
 `/dev/watchdog` (by default a requested 30-second timeout and a feed every
@@ -86,10 +88,11 @@ slot kernel commits it. Inspect the marker with
   `/dev/mmcblk0pN` is the OpenWrt rootfs (sysupgrade prints it; `p2` for slot
   1, `p4` for slot 2). The script stages the new kernel because sysupgrade
   copied it there, and `stage` should report `commit: yes`.
-- An install stick made with `tools/make-install-stick.sh --chainload` from
-  the same build. The installer sees that the slot already holds that image,
-  skips the write, and test-boots it. A stick from a different build
-  rewrites the slot first.
+- An install stick: "Swap to OpenWrt" test-boots the slot as it is (copying
+  its own kernel to `opencreator-os/chainload/`). "Install" from a stick of
+  the same build sees that the slot already holds that image, skips the
+  write and test-boots it; a stick from a different build rewrites the slot
+  first.
 
 **Stock-slot repair: flag on OpenWrt, stock marked invalid.**
 The installer's OpenWrt "Repair stock" action first points the flag at the

@@ -31,7 +31,7 @@ table has not changed; see "Backups and the repartition" below.
 ./build.sh
 installer/tools/build.sh                    # static sfdisk and partx for the stick
 (cd ../os-installer && make mips32)         # touchscreen app
-tools/make-install-stick.sh --chainload --app ../os-installer/build/mips32/os-installer \
+tools/make-install-stick.sh --app ../os-installer/build/mips32/os-installer \
     [--authorized-keys ~/.ssh/id_ed25519.pub] \
     /mnt/f/creator5-dev/opencreator-os-builds/<version> /tmp/stick
 ```
@@ -45,7 +45,7 @@ opencreator-os/install.sh, lib.sh      installer
 opencreator-os/slot.sh, restore.sh     the image's /lib/c5/slot.sh; Repair stock helpers
 opencreator-os/bin/sfdisk, bin/partx   static util-linux (installer/tools/build.sh)
 opencreator-os/os-installer            touchscreen app (--app; optional)
-opencreator-os/CHAINLOAD or FLIP, opencreator-os/authorized_keys   (options)
+opencreator-os/authorized_keys         optional SSH keys (--authorized-keys)
 opencreator-os/ACTION                  optional headless action
 kernel.uimage root.squashfs sysupgrade.tar VERSION chainload/ SHA256SUMS MD5SUMS
 ```
@@ -72,9 +72,9 @@ detected pair.
    table, the running slot, the boot flag, the image sizes, the disk layout
    and the space on `/usr/data`. Nothing is written yet; a failed check ends
    with "Nothing was written". If stock's data would not fit the shrunk
-   `userdata`, a screen "Please free N MB on /usr/data" stays up without buttons:
-   power-cycle without the stick, delete files from `/usr/data` (stock UI or
-   SSH) and try again.
+   `userdata`, a screen "Please free N MB on /usr/data" offers only "Boot to
+   stock": tap it, delete files from `/usr/data` (stock UI or SSH), then
+   reboot with the stick.
 2. **Menu.** "Install / update opencreator-os", "Swap to OpenWrt" or "Swap to
    stock" (disabled while OpenWrt is not installed), and "Uninstall"
    (disabled, not yet available).
@@ -91,20 +91,22 @@ detected pair.
       runs find `c5os` and skip this step.
    3. It saves the running stock kernel and rootfs to
       `/usr/data/opencreator-os/stock/`. It saves stock's Wi-Fi settings,
-      optional stick `authorized_keys`, the model and `pending-commit` on
-      `c5os` in `opencreator-os/`. A hand-written stick
-      `opencreator-os/wifi.conf` takes precedence over stock's Wi-Fi.
+      optional stick `authorized_keys` and the model on `c5os` in
+      `opencreator-os/`. A hand-written stick `opencreator-os/wifi.conf`
+      takes precedence over stock's Wi-Fi.
    4. It writes OpenWrt into the slot stock is not running from and reads it
-      back.
-   5. With `--chainload` it test-boots that OpenWrt from RAM
-      (`chainload.ko`), leaving the boot flag on stock until the healthy boot
-      commits it. If the kernel matches `c5os`'s `good-kernel`, the RAM test
-      is skipped and the flag can point directly at OpenWrt instead. Without
-      `--chainload` or `--flip` it ends on "OpenWrt written to slot N" and
-      stock boots on after "Continue".
-4. **Swap.** From stock with OpenWrt installed: points the boot flag at
-   OpenWrt and reboots into it. When the flag points at OpenWrt: points it
-   back at stock, and stock keeps booting.
+      back (a slot that already holds this build is not rewritten).
+   5. It always ends in OpenWrt. If the slot's kernel matches `c5os`'s
+      `good-kernel` (the kernel of the last healthy OpenWrt boot, e.g. when
+      the same build is reinstalled), it points the boot flag at OpenWrt and
+      reboots. Otherwise it writes `pending-commit` on `c5os` and test-boots
+      that OpenWrt from RAM (`chainload.ko`), "Test-booting OpenWrt from
+      RAM": the boot flag stays on stock until the healthy boot commits it.
+4. **Swap.** From stock with OpenWrt installed: the same rule as step 5, for
+   the kernel in OpenWrt's slot: a known-good kernel gets the boot flag and a
+   reboot, any other a RAM test boot (with `pending-commit` written if
+   missing). When the flag points at OpenWrt: points it back at stock, and
+   stock keeps booting.
 
 After a test boot, OpenWrt imports the saved settings in preinit, before
 uci-defaults, and attempts to join your Wi-Fi. Reaching START=99 with
@@ -118,14 +120,17 @@ SSH in as `root`, password `FlashForge2026`; **no key is needed**.
 hostname to `creator5` or `creator5pro` (missing model defaults to
 `creator5pro`).
 
-If a new-kernel test boot fails before it commits, power-cycle: stock boots.
+If a test boot fails before it commits, power-cycle: stock boots.
 Lack of Wi-Fi alone does not prevent a commit. The installer logs to
 `opencreator-os-install.log` on the stick and to
 `/usr/data/opencreator-os/install.log` under stock; the app logs to
 `os-installer.log` on the stick. See `recovery.md` for boot-log commands.
 
-`--flip` also requires a RAM test for a changed kernel. It only skips that
-test when the kernel matches the recorded `good-kernel`.
+A headless stick that stays in does not loop: once it has started OpenWrt
+(flipped the flag or begun a test boot; recorded per payload in
+`/usr/data/opencreator-os/install.state`), a later headless run of the same
+stick on stock ends with "OpenWrt already tried" and stock boots on. With
+the app, Install and Swap may always be retried.
 
 ### Headless stick
 
@@ -137,9 +142,12 @@ or swap slots. Over SSH to stock,
 `sh /mnt/opencreator-os/install.sh --from-stick /mnt --check` prints the plan
 and writes nothing; on an untouched printer it includes
 `check: c5os: would create (userdata 5828 MiB -> 2018 MiB, c5os 4096 MiB at sector 6676480)`,
-afterwards `check: c5os: present`. The other options (`--yes`,
-`--action install|swap|repair-stock|update`, `--backup`, `--ui`, `--hook`) are
-listed by `install.sh --help`; stock accepts only `install` and `swap`.
+afterwards `check: c5os: present`. The plan also says how the run ends:
+`check: afterwards: flip (known-good kernel)` or
+`check: afterwards: chainload test boot (root=/dev/mmcblk0pN)`. The other
+options (`--yes`, `--action install|swap|repair-stock|update`, `--backup`,
+`--ui`, `--hook`) are listed by `install.sh --help`; stock accepts only
+`install` and `swap`.
 
 For headless operation, put one word in `opencreator-os/ACTION` on the
 stick: `install`, `swap`, `repair-stock` or `update` (Windows line endings
@@ -173,9 +181,9 @@ everything after the last partition (`disk-tail.img`) to `emmc-backup/` on
 the stick in 1 GiB chunks, reads it back, compares checksums and then writes
 `VERIFIED`. It runs before `c5os` is created, so `userdata` is included at
 full size: about 7.3 GB, estimated at 15 to 25 minutes on the printer. If
-the stick has too little space, a screen says how much is needed;
-power-cycle and choose "Skip backup", or use a larger stick. A verified
-backup already on the stick is not made again.
+the stick has too little space, a screen says how much is needed and offers
+"Boot to stock": then use a larger stick, or reboot with this one and choose
+"Skip backup". A verified backup already on the stick is not made again.
 
 The files have the format of `phase0.sh --backup --all` (`NAME.img.000`,
 `.001`, ..., `first-mib.bin`, `SHA256SUMS`, `partmap.txt`, `MANIFEST.txt`)

@@ -48,7 +48,9 @@ Not a spec. Labels: **Observed** (seen on the printer or in a stock file),
 - **Decided (user requirements):**
   - checks run before every write;
   - when stock's data does not fit the shrunk `userdata`, a blocking screen
-    says "Please free X MB on /usr/data" and offers no way forward;
+    says "Please free X MB on /usr/data" and offers only "Boot to stock"
+    (`BLOCK <id> <text>|<button>`: the button exits the app with 1, so the
+    stock hook boots on);
   - creating the partition needs a confirm screen ("Create a 4 GB
     partition") whose Ok button unlocks after 5 seconds;
   - the eMMC backup is an installer step, written to the USB stick and
@@ -79,6 +81,11 @@ Not a spec. Labels: **Observed** (seen on the printer or in a stock file),
   is selectable; START=99 with `/data` mounted resets the counter. Only a
   matching `pending-commit` permits the health service to change the flag.
   Hardware watchdog feeding is handled by procd, not a separate daemon.
+- **Decided:** Install and Swap to OpenWrt on stock always end in OpenWrt:
+  a kernel matching `good-kernel` gets the boot flag and a reboot, any other
+  a chainload test boot that commits via `pending-commit`. The former
+  `FLIP`/`CHAINLOAD` stick options are gone. A headless hook run does not
+  repeat this for the same stick payload, so a stick left in cannot loop.
 
 ## Open questions for the design
 
