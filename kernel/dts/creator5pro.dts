@@ -60,7 +60,7 @@
 	 * userspace 0.5 s after the boot logo): no default-on. The DPU node
 	 * links it, so gpio-backlight keeps the pin as found at probe and the
 	 * fb driver (kernel/patches/0006) turns it off before programming the
-	 * display clocks and on 500 ms after the DPU sends frames.
+	 * display clocks and on 50 ms after the DPU sends frames.
 	 */
 	backlight: backlight {
 		compatible = "gpio-backlight";

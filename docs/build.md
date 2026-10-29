@@ -104,9 +104,10 @@ describe`), and runs `make`. Options: `--menuconfig`, `--kernel-menuconfig`,
   DPU node (`backlight = <&backlight>`). The panel is always powered, so
   `kernel/patches/0006` keeps the backlight off while the fb driver programs
   the EPLL and the LVDS PHY (it turns it off at probe, which also covers a
-  chainload from stock) and turns it on 500 ms after RDMA starts, like
-  stock (logo drawn, `sleep 0.5`, then `brightness` 1). Blank turns it off
-  before the DPU stops; unblank turns it on 500 ms after the restart.
+  chainload from stock) and turns it on 50 ms after RDMA starts. Stock
+  waits 0.5 s (logo drawn, `sleep 0.5`, then `brightness` 1); that long,
+  the first boot-log lines scroll by unseen. Blank turns it off before the
+  DPU stops; unblank turns it on 50 ms after the restart.
   `c5-chainload.sh go` turns stock's backlight off right before the jump.
 - `make zImage` produces `arch/mips/boot/compressed/zImage` (self-extracting,
   linked at `0x80f00000`); OpenWrt picks it up through `IMAGES_DIR:=compressed`

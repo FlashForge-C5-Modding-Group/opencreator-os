@@ -8,10 +8,11 @@ logo is on the screen.
 
 Take an optional "backlight" phandle from the DPU node. Turn it off at
 probe, before the EPLL and the LVDS PHY PLL are programmed (a chainload
-from stock arrives with it on), and on 500 ms after RDMA starts. Blank
-turns it off before the DPU stops; unblank turns it on 500 ms after the
-DPU restarts. Repeated blank/unblank requests no longer restart the DPU
-or unbalance its clocks.
+from stock arrives with it on), and on 50 ms after RDMA starts (stock
+waits 0.5 s, long enough for the first boot-log lines to scroll by
+unseen). Blank turns it off before the DPU stops; unblank turns it on
+50 ms after the DPU restarts. Repeated blank/unblank requests no longer
+restart the DPU or unbalance its clocks.
 
 ---
 diff --git a/module_drivers/drivers/video/fbdev/ingenic/fb_stage/ingenicfb.c b/module_drivers/drivers/video/fbdev/ingenic/fb_stage/ingenicfb.c
@@ -32,10 +33,10 @@ diff --git a/module_drivers/drivers/video/fbdev/ingenic/fb_stage/ingenicfb.c b/m
  
 +/*
 + * Optional "backlight" phandle on the DPU node. The backlight stays off
-+ * until the DPU sends frames and comes on BL_ON_DELAY_MS later, the order
-+ * the Creator5Pro stock system uses for its always-powered panel.
++ * until the DPU sends frames and comes on BL_ON_DELAY_MS later (stock,
++ * with the same always-powered panel, waits 0.5 s).
 + */
-+#define BL_ON_DELAY_MS	500
++#define BL_ON_DELAY_MS	50
 +static struct backlight_device *fbdev_bl;
 +
 +static void ingenicfb_bl_on(struct work_struct *work)
