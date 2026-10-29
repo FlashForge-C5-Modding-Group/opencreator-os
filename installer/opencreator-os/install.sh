@@ -300,7 +300,13 @@ save_stock() {
 	rm -rf "$SD.new"
 	mkdir -p "$SD.new" || fail "cannot create $SD.new"
 	dd if="$OKDEV" of="$SD.new/kernel.img" bs=1M 2>/dev/null || fail "reading $OKDEV"
-	head -c "$BU" "$ORDEV" > "$SD.new/rootfs.squashfs" || fail "reading $ORDEV"
+	# Stock mounts userdata sync: copy full MiB blocks, then only the
+	# squashfs tail, without relying on dd's unsupported count_bytes flag.
+	dd if="$ORDEV" of="$SD.new/rootfs.squashfs" bs=1M count=$((BU / 1048576)) 2>/dev/null || fail "reading $ORDEV"
+	if [ $((BU % 1048576)) -ne 0 ]; then
+		dd if="$ORDEV" bs=1M skip=$((BU / 1048576)) count=1 2>/dev/null |
+			head -c $((BU % 1048576)) >> "$SD.new/rootfs.squashfs" || fail "reading $ORDEV"
+	fi
 	sync
 	[ "$(file_sum "$SD.new/kernel.img")" = "$OKSUM" ] || fail "saved kernel.img does not match $OKDEV"
 	[ "$(file_sum "$SD.new/rootfs.squashfs")" = "$ORSUM" ] || fail "saved rootfs.squashfs does not match $ORDEV"

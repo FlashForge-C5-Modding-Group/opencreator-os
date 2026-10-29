@@ -96,9 +96,12 @@ detected pair.
       the installer continues on the next boot; leave the stick in. Later
       runs find `c5os` and skip this step.
    3. It saves the running stock kernel and rootfs to
-      `/usr/data/opencreator-os/stock/`. It saves stock's Wi-Fi settings,
-      optional stick `authorized_keys` and the model on `c5os` in
-      `opencreator-os/`. A hand-written stick `opencreator-os/wifi.conf`
+      `/usr/data/opencreator-os/stock/`: the whole kernel partition and
+      exactly the rootfs squashfs's `bytes_used`, copied in 1 MiB blocks
+      plus its final partial block. Both saved images are checksum-verified
+      in `stock.new/` before it is renamed to `stock/`. It saves stock's
+      Wi-Fi settings, optional stick `authorized_keys` and the model on
+      `c5os` in `opencreator-os/`. A hand-written stick `opencreator-os/wifi.conf`
       takes precedence over stock's Wi-Fi.
    4. It writes OpenWrt into the slot stock is not running from and reads it
       back (a slot that already holds this build is not rewritten).
