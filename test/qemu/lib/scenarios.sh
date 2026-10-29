@@ -382,12 +382,25 @@ EOF
 	boot s5-repair-next "$DISK" "$(spl_root "$DISK")" "$RUN/s5-repair-next.steps"
 	check "Update / Repair OpenWrt: same build reinstalled, edited fstab reset to the image's, user setting kept" \
 		is_eq "$(res_rc "$RUN/s5-repair.res" edit):$(boot_outcome s5-repair):$(res_out "$RUN/s5-repair-next.res" cfg | tr '\n' ' ')" "0:reboot:fstab=image notes=keepme "
+	# procd never answers a started upgrade (it stops ubusd and execs
+	# upgraded), so the installer must not report the ubus error as a failure
+	check "Update / Repair OpenWrt: the started upgrade is not reported as FAILED" log_lacks s5-repair '^QEMU-UI( INFO failed |-CONTINUE )'
+	check "Update / Repair OpenWrt: the last screen says the printer reboots by itself" log_has s5-repair '^QEMU-UI INFO update Updating OpenWrt\\nThe printer reboots by itself; do not power off\.$'
 
+	# changed kernel, run like on the printer: the stick's hook at boot, the
+	# app's "Update / Repair OpenWrt" (held at the menu while the shell edits
+	# settings and tries a garbage image)
 	new_disk
 	prepare_committed || return 0
+	c5os_rm "$DISK" /opencreator-os/last-test  # no "OpenWrt installed" screen first
 	make_sysupgrade_v2 "$RUN/v2.tar" changed-kernel > "$RUN/su-changed.log" 2>&1 || { fatal "building changed-kernel sysupgrade failed"; return 0; }
 	c5os_mkdir "$DISK" /qemu
 	check "copy changed-kernel sysupgrade into c5os" c5os_put "$DISK" "$RUN/v2.tar" /qemu/v2.tar
+	make_ui_payload "$RUN/payload-s5-a" "menu_main=1 hold=main" || { fatal "make-install-stick.sh failed"; return 0; }
+	rm -f "$RUN/payload-s5-a/sysupgrade.tar"
+	cp "$RUN/v2.tar" "$RUN/payload-s5-a/sysupgrade.tar"
+	resum "$RUN/payload-s5-a"
+	make_stick "$RUN/payload-s5-a" "$RUN/stick-s5-a.img"
 	v2sum=$(sha256sum < "$RUN/v2-root.squashfs" | cut -d' ' -f1)
 	v2len=$(stat -c %s "$RUN/v2-root.squashfs")
 	v2ksum=$(sha256sum < "$RUN/v2-kernel.uimage" | cut -d' ' -f1)
@@ -396,17 +409,21 @@ EOF
 	cat > "$st" <<'EOF'
 shell 400
 run 600 waitboot i=0; until dmesg | grep -q 'c5: booted:'; do i=$((i+1)); [ $i -lt 600 ] || break; sleep 1; done; dmesg | grep 'c5: '
+run 600 held i=0; until [ -f /tmp/qemu-ui-held ]; do i=$((i+1)); [ $i -lt 600 ] || exit 1; sleep 1; done
 run 30 board cat /tmp/sysinfo/board_name
 run 30 hostname uci set system.@system[0].hostname=c5test && uci commit system && uci get system.@system[0].hostname
 run 30 wifi printf "SSID='S5 Edited'\nPSK='s5-edited-123'\n" > /etc/c5/wifi.conf && cat /etc/c5/wifi.conf
 run 30 before head -c 11 /dev/mmcblk0p5 | tr -d '\000'; echo; head -c 1048576 /dev/mmcblk0p2 | sha256sum
 run 120 garbage dd if=/dev/urandom of=/tmp/garbage.bin bs=1k count=64 2>/dev/null; sysupgrade -v /tmp/garbage.bin; echo "sysupgrade-rc=$?"
 run 30 after head -c 11 /dev/mmcblk0p5 | tr -d '\000'; echo; head -c 1048576 /dev/mmcblk0p2 | sha256sum
-run 60 copy cp /data/qemu/v2.tar /tmp/v2.tar && sysupgrade -T /tmp/v2.tar; echo "test-rc=$?"
-send sysupgrade -v /tmp/v2.tar
+run 60 copy cp /data/qemu/v2.tar /tmp/v2.tar && sysupgrade -T /tmp/v2.tar; echo "test-rc=$?"; rm -f /tmp/v2.tar
+send touch /tmp/qemu-ui-release
 wait-exit 900
 EOF
-	boot s5-a "$DISK" "$(spl_root "$DISK")" "$st"
+	boot s5-a "$DISK" "$(spl_root "$DISK")" "$st" "$RUN/stick-s5-a.img"
+	check "the stick's hook offered the menu; the app chose Update / Repair OpenWrt" log_has s5-a '^QEMU-UI menu main: 1'
+	check "the started upgrade is not reported as FAILED" log_lacks s5-a '^QEMU-UI( INFO failed |-CONTINUE )'
+	check "the last screen says the printer reboots by itself" log_has s5-a '^QEMU-UI INFO update Updating OpenWrt\\nThe printer reboots by itself; do not power off\.$'
 	check "garbage image refused" res_has s5-a garbage 'sysupgrade-rc=[1-9]'
 	check "nothing written by the refused upgrade (flag, p2 head)" is_eq "$(res_out "$RUN/s5-a.res" after)" "$(res_out "$RUN/s5-a.res" before)"
 	check "v2 image passes sysupgrade -T" res_has s5-a copy 'test-rc=0'

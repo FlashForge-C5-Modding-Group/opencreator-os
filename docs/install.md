@@ -206,7 +206,7 @@ The backend offers these actions (menu labels apply when a display works):
 
 | Menu | Headless `ACTION` | What it does |
 |------|-------------------|--------------|
-| Update / Repair OpenWrt | `update` | Checks `sysupgrade.tar` against the stick's `SHA256SUMS`, runs `sysupgrade -T`, saves the configuration with `sysupgrade -b`, drops the files the image owns (`/etc/config/fstab`) from it, then runs `sysupgrade -f` with that backup. User settings (Wi-Fi, passwords, SSH keys, hostname) stay; the image-owned files are reset to the image's. Reinstalling the running build is allowed and repairs those files. |
+| Update / Repair OpenWrt | `update` | Copies `sysupgrade.tar` to `/tmp/sysupgrade.img` and checks it against the stick's `SHA256SUMS`, saves the configuration with `sysupgrade -b`, drops the files the image owns (`/etc/config/fstab`) from it, and checks image and backup with `sysupgrade -T -f`. Then it shows "Updating OpenWrt / The printer reboots by itself; do not power off." and runs `sysupgrade -f` with that backup. User settings (Wi-Fi, passwords, SSH keys, hostname) stay; the image-owned files are reset to the image's. Reinstalling the running build is allowed and repairs those files. |
 | Swap to stock | `swap` | Refuses unselectable stock; clears `pending-commit`, resets the counter, selects stock and reboots. |
 | Repair stock | `repair-stock` | Checks and restores the saved stock slot from `userdata` (`/usr/data/opencreator-os/stock/` on stock), reads it back, then selects stock and reboots only if selectable. The app asks first ("Repair stock" enabled after 5 s, or "Cancel"); headless runs do not ask. |
 
@@ -214,6 +214,17 @@ On stock and OpenWrt the installer exits with status 0 once it has asked for
 a reboot, and the app then exits at once without a Continue button, leaving
 the "Rebooting ..." screen up (stock acts on the reboot only after its USB
 hook returns). Failures and cancels (non-zero status) show Continue.
+
+Update / Repair OpenWrt cannot tell success from sysupgrade's status: on
+success procd never answers sysupgrade's `ubus call system sysupgrade` (it
+stops ubusd and hands over to `upgraded`), so sysupgrade itself returns an
+error ("Connection failed"). The installer therefore runs every check
+sysupgrade makes beforehand and ignores that status. It waits instead:
+stage2 sends TERM to every process left, the app, the installer and its
+wait included, so the "Updating OpenWrt" screen stays up (touch no longer
+responds) while stage2 writes the slot and reboots. If the wait runs its
+full 60 s, nothing took over: the installer shows "Update / Repair FAILED"
+(nothing was written).
 
 There is no uninstall action on OpenWrt: it cannot wipe its own slot.
 Repair does not restore `usershare`, and it does not take stock images from

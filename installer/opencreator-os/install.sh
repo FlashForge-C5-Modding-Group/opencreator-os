@@ -986,15 +986,32 @@ openwrt_main() {
 	update)
 		[ -s "$STICK/sysupgrade.tar" ] || abort "sysupgrade.tar missing in $STICK"
 		want=$(sums_get "$STICK/SHA256SUMS" sysupgrade.tar) || abort "cannot read SHA256SUMS"
-		if [ -z "$want" ] || [ "$(sha256sum < "$STICK/sysupgrade.tar" | cut -d' ' -f1)" != "$want" ]; then
+		# sysupgrade copies an image outside /tmp to this name itself; copying it
+		# first makes the checks below cover the exact file the upgrade installs
+		img=/tmp/sysupgrade.img
+		cp -f "$STICK/sysupgrade.tar" "$img" || { rm -f "$img"; abort "cannot copy sysupgrade.tar to $img"; }
+		if [ -z "$want" ] || [ "$(sha256sum < "$img" | cut -d' ' -f1)" != "$want" ]; then
 			abort "sysupgrade.tar checksum mismatch"
 		fi
-		sysupgrade -T "$STICK/sysupgrade.tar" || abort "sysupgrade image check failed"
 		update_config /tmp/c5-repack.tgz || abort "cannot save the configuration"
 		log "update: configuration kept without the image-owned $IMAGE_OWNED"
+		sysupgrade -T -f /tmp/c5-repack.tgz "$img" || abort "sysupgrade image or configuration check failed"
 		if [ "$CHECK" != 1 ]; then
-			ui_info update "Updating / repairing OpenWrt\nDo not power off."
-			sysupgrade -f /tmp/c5-repack.tgz "$STICK/sysupgrade.tar" || finish failed "Update / Repair FAILED" 1
+			# Every check sysupgrade makes before it hands over to procd has
+			# passed above (-T). On success procd never answers the ubus call:
+			# it stops ubusd and execs upgraded, so sysupgrade returns non-zero
+			# ("Connection failed"); its status says nothing. stage2 then sends
+			# TERM to every process left, this sleep and this script included,
+			# and reboots: a killed sleep means the upgrade runs, so leave this
+			# screen up. A full sleep means nothing took over and nothing was
+			# written.
+			ui_info update "Updating OpenWrt\nThe printer reboots by itself; do not power off."
+			sync
+			sysupgrade -f /tmp/c5-repack.tgz "$img"
+			log "update: sysupgrade returned $?; waiting for stage2 to take over and reboot"
+			sync
+			sleep 60 || exit 0
+			finish failed "Update / Repair FAILED\nOpenWrt did not start the upgrade; nothing was written." 1
 		fi
 		;;
 	swap | repair-stock)
