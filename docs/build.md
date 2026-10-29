@@ -88,6 +88,10 @@ describe`), and runs `make`. Options: `--menuconfig`, `--kernel-menuconfig`,
   printk. The leading `console=ttyS0,115200n8` keeps procd on serial: procd
   takes the first `console=` word for its shutdown output, and `askconsole`
   uses `/dev/console` (ttyS0) when there are several. No login runs on tty0.
+  Before fbcon takes over (about 1.25 s), dummycon keeps the VT buffer at
+  100x30 too (`CONFIG_DUMMY_CONSOLE_COLUMNS=100`,
+  `CONFIG_DUMMY_CONSOLE_ROWS=30`), rather than retaining only 80x25. The
+  first screen fbcon draws therefore has a full 30 lines.
   `loglevel=8` comes from the SPL after the prefix and stays: the panel
   shows everything serial shows. `vt.global_cursor_default=0` hides the VT
   cursor, so no blinking `_` sits under the log. fbcon scrolls by redrawing
