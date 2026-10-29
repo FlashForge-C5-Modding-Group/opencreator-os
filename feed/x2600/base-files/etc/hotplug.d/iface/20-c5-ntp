@@ -1,0 +1,8 @@
+# shellcheck shell=sh
+# Sourced by hotplug-call in a subshell. ntpd's ujail bind-mounts the
+# /etc/resolv.conf file of its start (empty before any interface brought DNS;
+# netifd replaces the file, the mount keeps the old one), and the init
+# script's interface trigger only reloads: procd keeps the unchanged instance.
+
+[ "$ACTION" = ifup ] && [ "$INTERFACE" != loopback ] || exit 0
+/etc/init.d/sysntpd enabled && /etc/init.d/sysntpd restart
