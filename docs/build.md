@@ -43,10 +43,11 @@ for the PC). `tools/ui-demo.sh APP VERSION_DIR` runs the SDL build under WSLg
 against the real installer and a loop-mounted image laid out like the
 printer's eMMC (needs sudo; a backup in the demo writes about 7.3 GB).
 
-`build.sh` clones OpenWrt v24.10.8 into `$WORK/openwrt`, links
-`feed/x2600` as `target/linux/x2600`, installs the package feeds (again
-whenever `OPENWRT_TAG` changes), unpacks the
-SDK kernel (`kernel/prepare.sh`), writes `.config` from `config/openwrt.seed`
+`build.sh` clones OpenWrt v24.10.8 into `$WORK/openwrt`, applies the small
+source fixes in `patches/openwrt/` (idempotently, with no patch fuzz), copies
+`feed/x2600` to `target/linux/x2600`, installs the package feeds (again
+whenever `OPENWRT_TAG` changes), unpacks the SDK kernel
+(`kernel/prepare.sh`), writes `.config` from `config/openwrt.seed`
 plus `CONFIG_EXTERNAL_KERNEL_TREE` and `CONFIG_VERSION_NUMBER` (`git
 describe`), and runs `make`. Options: `--menuconfig`, `--kernel-menuconfig`,
 `--clean-kernel`.
@@ -183,6 +184,12 @@ Packages come from `DEFAULT_PACKAGES` in `feed/x2600/Makefile` (plus
   build: WPA3-SAE, OWE, Suite-B 192, 802.11r, and PMF (802.11w has no build
   switch any more). `wpa-supplicant-basic` is not an option: it uses the
   internal TLS, which has no SAE or OWE.
+  The local `wifi-scripts` patch checks for optional previous radio state
+  before selecting it and skips the hostapd reset call when its executable
+  is absent, just as normal setup does. Daemon errors remain visible.
+  Shared key management treats an unset FILS option as disabled, including
+  preserved client configurations: no UCI migration or unused AP daemon is
+  needed to avoid these warnings.
 - No `fdisk` (and its `libfdisk`, `libncurses`, `terminfo`): OpenWrt never
   calls it. The installer's `fdisk -l` (`part_table`) and `c5-chainload.sh`
   run only on stock.

@@ -52,6 +52,20 @@ if [ "$(git -C "$OW" describe --tags --exact-match 2>/dev/null)" != "$OPENWRT_TA
 	git -C "$OW" fetch --tags
 	git -C "$OW" checkout -q "$OPENWRT_TAG"
 fi
+
+# wifi-scripts installs source files directly (its Build/Prepare is empty),
+# so apply these small source patches rather than package patch overlays.
+log "OpenWrt source patches"
+for p in "$REPO"/patches/openwrt/*.patch; do
+	[ -e "$p" ] || continue
+	if patch -d "$OW" -p1 -R --dry-run -s -f --fuzz=0 < "$p" >/dev/null 2>&1; then
+		log "already applied: $(basename "$p")"
+	else
+		patch -d "$OW" -p1 -N -s --fuzz=0 < "$p" || die "patch failed: $(basename "$p")"
+		log "applied: $(basename "$p")"
+	fi
+done
+
 # Copy (not symlink) the target: the repo usually sits on a Windows drive
 # where every file looks 0777, so take file modes from the git index.
 log "sync target/linux/x2600"

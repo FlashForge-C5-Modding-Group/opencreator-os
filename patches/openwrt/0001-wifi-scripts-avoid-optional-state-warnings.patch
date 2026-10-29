@@ -1,0 +1,42 @@
+wifi-scripts: avoid warnings for absent prior state, hostapd and FILS
+
+Initial setup has no data object. Check its type before selecting it, rather
+than asking jshn to select a nonexistent optional object. Reset hostapd only
+when installed, matching the executable guard already used by setup.
+Treat an unset FILS option as disabled in shared key management, including
+preserved station configurations that predate an explicit FILS setting.
+
+OpenWrt main still has all three unguarded paths as of 2026-10-29; this is a
+local fix, not an upstream backport. Keep actual daemon errors visible.
+
+--- a/package/network/config/wifi-scripts/files/lib/netifd/wireless/mac80211.sh
++++ b/package/network/config/wifi-scripts/files/lib/netifd/wireless/mac80211.sh
+@@ -1114,7 +1114,7 @@
+ 
+ mac80211_reset_config() {
+ 	hostapd_conf_file="/var/run/hostapd-$phy$vif_phy_suffix.conf"
+-	ubus_call hostapd config_set '{ "phy": "'"$phy"'", "radio": '"$radio"', "config": "", "prev_config": "'"$hostapd_conf_file"'" }' > /dev/null
++	[ -x /usr/sbin/hostapd ] && ubus_call hostapd config_set '{ "phy": "'"$phy"'", "radio": '"$radio"', "config": "", "prev_config": "'"$hostapd_conf_file"'" }' > /dev/null
+ 	ubus_call wpa_supplicant config_set '{ "phy": "'"$phy"'", "radio": '"$radio"', "config": [] }' > /dev/null
+ 	wdev_tool "$phy$phy_suffix" set_config '{}'
+ }
+@@ -1142,7 +1142,7 @@
+ 
+ 	mac80211_set_suffix
+ 
+-	json_select data && {
++	json_is_a data object && json_select data && {
+ 		json_get_var prev_rxantenna rxantenna
+ 		json_get_var prev_txantenna txantenna
+ 		json_select ..
+--- a/package/network/config/wifi-scripts/files/lib/netifd/hostapd.sh
++++ b/package/network/config/wifi-scripts/files/lib/netifd/hostapd.sh
+@@ -75,7 +75,7 @@
+ 		;;
+ 	esac
+ 
+-	[ "$fils" -gt 0 ] && {
++	[ "${fils:-0}" -gt 0 ] && {
+ 		case "$auth_type" in
+ 			eap192)
+ 				append wpa_key_mgmt FILS-SHA384
