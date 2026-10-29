@@ -897,7 +897,10 @@ scenario_S14() {
 	check "flag stays on stock until the test boot commits" is_eq "$(img_flag "$DISK")" ota:kernel2
 	st=$RUN/s14-a-openwrt.steps
 	printf 'expect 600 ^QEMU-UI MENU installed \nexpect 300 reboot: Restarting system\nwait-exit 240\n' > "$st"
-	boot s14-a-openwrt "$DISK" "$(chainload_cmdline s14-a)" "$st" "$stick"
+	# Malta/TCG clock and delay calibration vary under parallel host load.
+	# Test UI/commit ordering here, not the printer's 180 s boot budget (S2).
+	boot s14-a-openwrt "$DISK" "$(chainload_cmdline s14-a) C5_TEST_DEADLINE=600" "$st" "$stick"
+	check "QEMU test boot armed the extended 600 s deadline" log_has s14-a-openwrt 'c5: bootcount: slot 1 test boot; counter and flag untouched; healthy within 600 s or back to stock'
 	check "healthy test boot committed: flag -> OpenWrt (ota:kernel)" is_eq "$(img_flag "$DISK")" ota:kernel
 	check "OpenWrt shows OpenWrt installed with one Reboot button" log_has s14-a-openwrt '^QEMU-UI MENU installed OpenWrt installed\\nThe test boot succeeded and OpenWrt is now the boot system\. Remove the USB stick, then tap Reboot\.\|Reboot$'
 	check "the screen comes after the commit" bash -c "awk '/c5: booted: committed/ && !c { c = NR } /c5: booted: last-test ok/ && !o { o = NR } /^QEMU-UI MENU installed / && !m { m = NR } END { exit !(c && o && m && c < o && o < m) }' \"\$1\"" _ "$RUN/s14-a-openwrt.log"

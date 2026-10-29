@@ -76,6 +76,13 @@ Test-only deviations, all outside the product code:
   60 s for the USB stick: QEMU's xHCI + usb-storage enumerate more slowly than
   stock's 2 s "wait for USB".
 - `C5_C5OS_MIB=384` is exported by `/qemu-stock-init` (the 2 GiB card).
+- S14's healthy UI test boot appends `C5_TEST_DEADLINE=600` to its chainload
+  command line, using the existing `slot.sh` test override. Malta/TCG guest
+  clock and delay-loop calibration vary with parallel host load (`-j 8`),
+  so the printer's 180 s budget can expire before the emulated healthy boot.
+  S14 tests commit/UI ordering, not boot speed; its host-side waits remain
+  bounded. S2 still checks the default 180 s deadline and S15 checks failure
+  with its explicit 10 s deadline. No printer behavior or kernel `lpj` changes.
 - stock's endless `sleep 100000` after a hook exit 0 prints
   `QEMU-STOCK-HOOK rc=0 stall` and ends the hook script instead.
 - QEMU malta kernel: the DT compatible above, and malta's DT shim recognises
