@@ -213,10 +213,18 @@ The backend offers these actions (menu labels apply when a display works):
 | Swap to stock | `swap` | Refuses unselectable stock; clears `pending-commit`, resets the counter, selects stock and reboots. |
 | Repair stock | `repair-stock` | Checks and restores the saved stock slot from `userdata` (`/usr/data/opencreator-os/stock/` on stock), reads it back, then selects stock and reboots only if selectable. The app asks first ("Repair stock" enabled after 5 s, or "Cancel"); headless runs do not ask. |
 
-On stock and OpenWrt the installer exits with status 0 once it has asked for
-a reboot, and the app then exits at once without a Continue button, leaving
-the "Rebooting ..." screen up (stock acts on the reboot only after its USB
-hook returns). Failures and cancels (non-zero status) show Continue.
+For installer actions that request a reboot, status 0 makes the app exit
+without a Continue button, leaving the "Rebooting ..." screen up. Failures
+and cancels (non-zero status) show Continue; on stock, finishing that screen
+returns to stock startup without rebooting.
+
+The installer's `reboot_now` helper runs `sync` before rebooting, flushing
+the eMMC filesystems and USB stick. On stock it uses `reboot -f`: the USB
+hook runs synchronously under BusyBox init's `sysinit`, whose startup path
+can remain blocked in `app_startup.sh`'s long sleep after a hook exits 0. A
+normal reboot request waits on init and can hang there, so stock needs the
+direct forced reboot after the explicit sync. On OpenWrt the helper keeps
+the normal reboot through procd; it does not force a reboot.
 
 Update / Repair OpenWrt cannot tell success from sysupgrade's status: on
 success procd never answers sysupgrade's `ubus call system sysupgrade` (it

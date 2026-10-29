@@ -13,7 +13,7 @@ OWRT_ROOT=/dev/mmcblk0p2
 # which happens inside the hook) and for QEMU to exit.
 steps_stock() {
 	cat > "$1" <<'EOF'
-expect 400 ^(QEMU-STOCK-DONE|QEMU-CHAINLOAD root=)|reboot: Restarting system
+expect 180 ^(QEMU-STOCK-DONE|QEMU-CHAINLOAD root=)|reboot: Restarting system
 wait-exit 240
 EOF
 }
@@ -712,8 +712,8 @@ scenario_S9() {
 
 # ui_stock_boot NAME STICKIMG [TIMEOUT]: stock boot with a --ui stick
 ui_stock_boot() {
-	local st=$RUN/$1.steps t=${3:-400}
-	printf 'expect %s ^(QEMU-STOCK-DONE|QEMU-CHAINLOAD root=)\nwait-exit 240\n' "$t" > "$st"
+	local st=$RUN/$1.steps t=${3:-180}
+	printf 'expect %s ^(QEMU-STOCK-DONE|QEMU-CHAINLOAD root=)|reboot: Restarting system\nwait-exit 240\n' "$t" > "$st"
 	QEMU_BOOT_TIMEOUT=$((t + 600)) boot "$1" "$DISK" "$(spl_root "$DISK")" "$st" "$2"
 }
 ui_menu_line() { sed -n 's/^QEMU-UI \(MENU main .*\)/\1/p' "$RUN/$1.log" | tr -d '\r' | tail -n 1; }
@@ -806,6 +806,30 @@ EOF
 	check "stick Wi-Fi override imported" res_has s12-openwrt wificonf "^SSID='QEMU Stick Override'"
 	check "authorized keys imported from c5os" res_has s12-openwrt keys '^ssh-ed25519 .* qemu-fixture$'
 	check "model imported from c5os" res_has s12-openwrt model '^Creator5Pro 0029$'
+
+	# Force only the kernel partition-notification failure: leave the real
+	# GPT write, stock sysinit and reboot command intact. The next boot sees
+	# the new GPT and must finish with the same stick, without looping.
+	new_stock_disk
+	make_ui_payload "$RUN/payload-s12-reread" "menu=1 confirm_backup=cancel confirm_c5os=ok" ||
+		{ fatal "make-install-stick.sh failed"; return 0; }
+	cat > "$RUN/payload-s12-reread/opencreator-os/bin/partx" <<'EOF'
+#!/bin/sh
+echo "QEMU: kernel partition update unavailable" >&2
+exit 1
+EOF
+	resum "$RUN/payload-s12-reread"
+	stick=$RUN/stick-s12-reread.img
+	make_stick "$RUN/payload-s12-reread" "$stick"
+	ui_stock_boot s12-reread "$stick"
+	check "c5os: stale kernel partitions request a real reboot" is_eq "$(boot_outcome s12-reread):$(img_flag "$DISK")" reboot:ota:kernel2
+	check "c5os: reboot screen shown" log_has s12-reread '^QEMU-UI INFO c5os-reboot '
+	check "c5os: reboot marker saved to userdata" data_has "$DISK" /opencreator-os/c5os-rebooted
+	check "c5os: installer ends without Continue" log_lacks s12-reread '^QEMU-UI-CONTINUE'
+	ui_stock_boot s12-reread-next "$stick" 600
+	check "c5os: same stick completes after the reboot" is_eq "$(boot_outcome s12-reread-next)" "chainload:$OWRT_ROOT"
+	check "c5os: next boot finishes the interrupted setup" log_has s12-reread-next 'c5os: finishing an interrupted c5os setup'
+	check "c5os: reboot marker cleared" bash -c "! debugfs -R 'stat /opencreator-os/c5os-rebooted' '$(userdata_spec "$DISK")' 2>/dev/null | grep -q '^Inode:'"
 }
 
 # S13: refusals on a stock-layout printer: userdata too full (blocked before
@@ -948,6 +972,17 @@ scenario_S14() {
 	check "same-build reinstall directly selects OpenWrt" is_eq "$(boot_outcome s14-reinstall):$(img_flag "$DISK")" reboot:ota:kernel
 	check "flip records last-test started" is_eq "$(c5os_cat "$DISK" /opencreator-os/last-test)" "started qemu-test"
 	check "stock flip: Rebooting into OpenWrt, then the app ends without Continue" bash -c "grep -q '^QEMU-UI INFO reboot Rebooting into OpenWrt (slot 1)' \"\$1\" && ! grep -q '^QEMU-UI-CONTINUE' \"\$1\"" _ "$RUN/s14-reinstall.log"
+
+	# Unlike the untested swap above, this stock-side swap must select the
+	# known-good kernel directly and reboot while sysinit is still waiting.
+	printf 'ota:kernel2\n' | dd of="$DISK" bs=512 seek="${PSTART[5]}" conv=sync,notrunc status=none
+	c5os_rm "$DISK" /opencreator-os/last-test
+	make_ui_payload "$RUN/payload-s14-swap-good" "menu=2" || { fatal "make-install-stick.sh failed"; return 0; }
+	make_stick "$RUN/payload-s14-swap-good" "$RUN/stick-s14-swap-good.img"
+	ui_stock_boot s14-swap-good "$RUN/stick-s14-swap-good.img"
+	check "known-good stock swap directly selects OpenWrt and reboots" is_eq "$(boot_outcome s14-swap-good):$(img_flag "$DISK")" reboot:ota:kernel
+	check "known-good stock swap never chainloads" log_lacks s14-swap-good '^QEMU-CHAINLOAD '
+	check "known-good stock swap ends without Continue" log_lacks s14-swap-good '^QEMU-UI-CONTINUE'
 }
 
 # S15: failed test boots return to stock by themselves and stock reports

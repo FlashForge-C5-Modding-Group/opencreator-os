@@ -219,7 +219,13 @@ before its UI and runs `runFirmwareExe.sh`, which runs
 `opencreator-os-restore/restore.sh`. It checks the partition table against
 the backup's `partmap.txt` and the image checksums, refuses the slot stock
 runs from and anything mounted, writes, and reads back. With
-`--flag-stock` it then points the flag at the restored slot and reboots.
+`--flag-stock` it then points the flag at the restored slot and reboots if
+the flag changed; otherwise stock startup continues.
+The stock-only restore helper runs `sync` before `reboot -f`, flushing the
+eMMC filesystems and USB stick before the direct reboot. This bypasses
+BusyBox init while its synchronous `sysinit` startup is blocked; a normal
+reboot request can hang there. Without `--flag-stock`, success returns to
+stock startup without rebooting.
 Output: `opencreator-os-restore/result.log`. Its action file is marked done
 on success and stays in place on failure. One slot per stick.
 `--usershare` is refused under stock because stock has `usershare` mounted;

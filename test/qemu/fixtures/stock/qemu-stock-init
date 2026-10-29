@@ -1,14 +1,16 @@
 #!/bin/sh
-# QEMU test stand-in for stock's rcS, run by stock busybox init (inittab
-# sysinit). Uses stock's own scripts where they exist:
+# QEMU test stand-in for stock's rcS, run synchronously by the real stock
+# busybox init (inittab sysinit). Uses stock's own scripts where they exist:
 #   S08mdev (mdev daemon), S09mount_mmc_prog (usershare -> /usr/prog),
 #   S21mount_mmc_ext4 (userdata -> /usr/data), then /qemu-app-startup.sh =
 #   the USB-hook part of stock's app_startup.sh (generated at fixture build
-#   time; its "sleep 100000" stall prints a marker and exits instead).
-# Then an optional test action /usr/data/qemu-action.sh (injected by the
-# harness; stands in for commands a user would run over SSH) is run once.
-# Serial markers: QEMU-STOCK-*. Whatever happens next (reboot requested by
-# a script, or power-off) is decided by busybox init / /qemu-stock-finish.
+#   time; its success stall prints QEMU-STOCK-HOOK rc=0 stall and sleeps
+#   forever). A plain reboot stays pending while init waits for sysinit;
+#   no reboot command is replaced by the fixture.
+# Only if the hook returns does an optional /usr/data/qemu-action.sh
+# (injected by the harness; commands a user would run over SSH) run once.
+# Serial markers: QEMU-STOCK-*. After sysinit returns, busybox init handles
+# a pending reboot; otherwise /qemu-stock-finish powers off.
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
 # The QEMU kernel is mainline 6.6; the stock installer and restore stick
 # read this documented release override. The 2 GiB test eMMC uses 384 MiB c5os.

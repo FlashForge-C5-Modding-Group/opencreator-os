@@ -110,11 +110,11 @@ build_stock_fixture() {
 	(cd "$stage" && mkdir -p proc sys tmp run mnt root media opt home usr/prog usr/data)
 	install -m 0644 "$QDIR/fixtures/stock/inittab" "$stage/etc/inittab"
 	install -m 0755 "$QDIR/fixtures/stock/qemu-stock-init" "$QDIR/fixtures/stock/qemu-stock-finish" "$stage/"
-	# The USB-hook part of stock's app_startup.sh, unchanged except that the
-	# endless "sleep 100000" stall prints a marker and ends the script.
+	# Keep the stock hook's synchronous success stall inside sysinit, adding
+	# only a marker and an endless loop (the printer sleeps for 100000 s).
 	git -C "$STOCK_ARCHIVE" show HEAD:software/app_startup.sh | tr -d '\r' |
 		awk '/^CONTROL_DIR=/ { exit }
-			/sleep 100000/ { sub(/sleep 100000/, "echo QEMU-STOCK-HOOK rc=0 stall; exit 0") }
+			/sleep 100000/ { sub(/sleep 100000/, "echo QEMU-STOCK-HOOK rc=0 stall; while :; do sleep 100000; done") }
 			{ print }
 			END { print "echo QEMU-STOCK-HOOK continue" }' > "$stage/qemu-app-startup.sh"
 	grep -q 'QEMU-STOCK-HOOK rc=0 stall' "$stage/qemu-app-startup.sh" || { echo "fixture: app_startup.sh stall line not found" >&2; return 1; }

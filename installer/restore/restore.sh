@@ -220,8 +220,7 @@ if [ "$FLAG_CHANGED" = 1 ]; then
 	show restored
 	[ "$HOOK" = 1 ] && sleep "${C5_SCREEN_PAUSE:-10}"
 	log "restore: rebooting into slot $FLAG_TO"
-	sync
-	$C5_REBOOT
+	reboot_now
 	exit 0
 fi
 finish restored 1

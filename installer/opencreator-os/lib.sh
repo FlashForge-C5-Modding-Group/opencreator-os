@@ -13,7 +13,7 @@
 #   C5_FDISK       fdisk binary, run as "$C5_FDISK -l $C5_DISK" (fdisk)
 #   C5_SFDISK      util-linux sfdisk for GPT dump/write       (sfdisk; install.sh: the stick's bin/sfdisk)
 #   C5_DATA        stock userdata mount point                 (/usr/data)
-#   C5_REBOOT      reboot command                             (reboot)
+#   C5_REBOOT      reboot command (stock adds -f)              (reboot)
 #   C5_UNAME_R     kernel release                             ($(uname -r))
 #   C5_SUM         force md5sum or sha256sum                  (sha256sum if present)
 #   C5_C5OS_MIB    size of the c5os partition in MiB          (4096)
@@ -61,6 +61,20 @@ action_read() {
 	fi
 	[ -n "$ACTION" ] || { [ "$C5_SYSTEM" != stock ] || ACTION=install; }
 	case "$ACTION" in '' | install | swap | repair-stock | update) return 0 ;; *) return 1 ;; esac
+}
+
+# Stock runs the USB hook inside init's synchronous sysinit action. A normal
+# reboot only signals init, which cannot service it while that action waits.
+# Flush userdata, usershare (/usr/prog and its /etc bind mount), and the USB
+# stick before bypassing init, as stock's own app_startup.sh update path does.
+# OpenWrt's procd handles the normal reboot path; do not force it there.
+reboot_now() {
+	sync
+	if [ "${C5_SYSTEM:-stock}" = stock ]; then
+		$C5_REBOOT -f
+	else
+		$C5_REBOOT
+	fi
 }
 
 # --- logging -----------------------------------------------------------------
