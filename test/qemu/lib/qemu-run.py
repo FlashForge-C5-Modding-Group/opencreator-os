@@ -160,9 +160,13 @@ class Console:
         end = min(time.monotonic() + timeout, self.deadline)
         while self.alive() and time.monotonic() < end:
             self._pump(0.5)
+        # drain to EOF only once QEMU is gone: while it runs, _pump(0)
+        # returns True with nothing to read and this would never end
+        if self.alive():
+            return False
         while self._pump(0):
             pass
-        return not self.alive()
+        return True
 
     def result(self, text):
         self.results.write(text)

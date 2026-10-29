@@ -116,7 +116,12 @@ prepare_committed_locked() {
 	[ "$(boot_outcome setup-install)" = "chainload:$OWRT_ROOT" ] ||
 		{ fatal "setup: no chainload to $OWRT_ROOT (outcome $(boot_outcome setup-install))"; return 1; }
 	st=$RUN/setup-openwrt.steps
-	steps_openwrt "$st" < /dev/null
+	# wait for the swap file as S2 does: a poweroff while c5-swap still
+	# creates it leaves c5os unclean, and the journal replay at the next mount
+	# drops what the scenarios then write there with debugfs
+	steps_openwrt "$st" <<'EOF'
+run 300 swap i=0; until grep -q '^/data/swapfile[[:space:]]' /proc/swaps; do i=$((i+1)); [ $i -lt 300 ] || exit 1; sleep 1; done
+EOF
 	boot setup-openwrt "$DISK" "$(chainload_cmdline setup-install)" "$st" || return 1
 	[ "$(img_flag "$DISK")" = ota:kernel ] || { fatal "setup: first boot did not commit (flag '$(img_flag "$DISK")')"; return 1; }
 	cp --sparse=always "$DISK" "$c.tmp" && mv "$c.tmp" "$c"
