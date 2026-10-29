@@ -196,6 +196,7 @@ run 300 swap i=0; until grep -q '^/data/swapfile[[:space:]]' /proc/swaps; do i=$
 # slirp with restrict=on offers no DNS server: give lan one, as Wi-Fi's DHCP
 # does on the printer after ntpd started, and expect the jailed ntpd to see it
 run 150 ntpdns uci set network.lan.dns=10.0.2.3 && uci commit network && ifup lan; i=0; until p=; for p in $(pidof ntpd); do [ "$(readlink /proc/$p/ns/mnt)" != "$(readlink /proc/self/ns/mnt)" ] && grep -q '^nameserver 10\.0\.2\.3' /proc/$p/root/etc/resolv.conf 2>/dev/null && break; p=; done; [ -n "$p" ]; do i=$((i+1)); [ $i -lt 120 ] || exit 1; sleep 1; done; grep nameserver /proc/$p/root/etc/resolv.conf; uci delete network.lan.dns; uci commit network
+run 30 forwarding v4=$(cat /proc/sys/net/ipv4/ip_forward); v6=$(cat /proc/sys/net/ipv6/conf/all/forwarding); printf 'IPv4 forwarding=%s IPv6 forwarding=%s\n' "$v4" "$v6"; [ "$v4:$v6" = 0:0 ]
 EOF
 	boot s2-openwrt "$DISK" "$(chainload_cmdline s2-stock)" "$st" "$RUN/stick-s2-stock.img"
 	check "OpenWrt shell reached and c5-booted ran" res_has s2-openwrt waitboot 'c5: booted:'
@@ -222,6 +223,7 @@ EOF
 	check "hard-float userland works (awk 1.5*2 = 3)" res_has s2-openwrt float '^3$'
 	check "overlay (rootfs_data) is ext4 after the squashfs on p2" overlay_is_ext4 "$DISK" 2
 	check "ntpd's jail sees the DNS server lan got after ntpd started (sysntpd restarted)" res_has s2-openwrt ntpdns '^nameserver 10\.0\.2\.3'
+	check "IPv4 and IPv6 forwarding remain off after boot and lan ifup" res_ok s2-openwrt forwarding
 	check "wifi.conf persisted in the overlay upper dir" bash -c "debugfs -R 'cat /upper/etc/c5/wifi.conf' '$(overlay_spec "$DISK" 2)' 2>/dev/null | grep -q '^SSID='"
 	check "logs written to c5os opencreator-os/logs" bash -c "for f in dmesg-last.txt logread-last.txt bootlog-last.txt; do debugfs -R \"stat /opencreator-os/logs/\$f\" '$(c5os_spec "$DISK")' 2>/dev/null | grep -q '^Inode:' || exit 1; done"
 	check "c5-swap created /data/swapfile (mode 600) and swap is on" bash -c "printf '%s\n' \"\$1\" | grep -qE '^/data/swapfile[[:space:]]+file[[:space:]]+[1-9]' && printf '%s\n' \"\$1\" | grep -qE '^-rw------- '" _ "$(res_out "$RUN/s2-openwrt.res" swap)"

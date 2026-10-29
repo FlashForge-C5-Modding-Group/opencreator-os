@@ -204,3 +204,11 @@ migration code: a change to one reaches an existing install through a fresh
 install or "Update / Repair OpenWrt" from the USB stick, which drops the
 image-owned files listed in `IMAGE_OWNED` (`installer/opencreator-os/install.sh`)
 from the kept configuration.
+
+`feed/x2600/base-files/etc/sysctl.d/11-c5.conf` disables IPv4 and IPv6
+forwarding (`ip_forward`, IPv6 `all.forwarding` and `default.forwarding`)
+and sets `kernel.panic=10`. It sorts after OpenWrt 24.10.8 base-files'
+`10-default.conf`, which enables forwarding and sets a 3-second panic
+timeout; `10-c5.conf` would run too early. The release's netifd does not
+write forwarding sysctls on interface setup. S2 checks that IPv4 and IPv6
+forwarding are still zero after boot and a lan `ifup`.
