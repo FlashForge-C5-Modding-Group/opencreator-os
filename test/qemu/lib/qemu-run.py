@@ -34,7 +34,7 @@ import subprocess
 import sys
 import time
 
-PASSWORD = os.environ.get("QEMU_ROOT_PASSWORD", "FlashForge2026")
+PASSWORD = os.environ.get("QEMU_ROOT_PASSWORD", "root")
 
 
 class Console:

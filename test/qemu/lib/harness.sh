@@ -10,7 +10,7 @@ STOCK_KERNEL=$FIX/stock-kernel.uimage
 BASE_DISK=$FIX/base-disk.img
 C5OS_DISK=$FIX/c5os-disk.img
 OWRT_SQFS=$FIX/openwrt-root.squashfs
-QEMU_ROOT_PASSWORD=${QEMU_ROOT_PASSWORD:-FlashForge2026}
+QEMU_ROOT_PASSWORD=${QEMU_ROOT_PASSWORD:-root}
 export QEMU_ROOT_PASSWORD
 
 # ---------------------------------------------------------------- logging --

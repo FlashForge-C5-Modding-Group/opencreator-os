@@ -148,7 +148,7 @@ the normal OpenWrt menu. Without a working display only the log line
 is written and OpenWrt keeps running. The report is then renamed to
 `last-test.seen`. `--check` only logs the report.
 
-SSH in as `root`, password `FlashForge2026`; **no key is needed**.
+SSH in as `root`, password `root`; **no key is needed**.
 `authorized_keys` on the stick is optional. The model sets the initial
 hostname to `creator5` or `creator5pro` (missing model defaults to
 `creator5pro`).
