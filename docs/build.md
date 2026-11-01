@@ -16,33 +16,29 @@ sudo apt install build-essential clang flex bison g++ gawk gcc-multilib \
 
 Both come from Ingenic's FTP server, `ftp://ftp.ingenic.com.cn`. Log in as
 `ingenic_public`; Ingenic gives out the password, and it is not stored in
-this repository.
+this repository. Export it for this step and step 5:
+
+```sh
+export INGENIC_FTP_PASS=...
+```
 
 **Toolchain** (MIPS GCC 12.1, glibc 2.33; the one stock was built with).
 Ingenic's toolchains are in `/Ingenic-MIPS-Toolchain/releases/` ([release
-notes](https://www.ingenic.com.cn/news-detail/nid-348.html)). Use r6.0.0:
-
-```
-/Ingenic-MIPS-Toolchain/releases/ingenic-mips-toolchain-r6.0.0/mips-xburst2-linux-toolchain-r6.0.0.tar.bz2
-sha256 4e3359e32c2fb7d9e573ce84370220a66e3998bb911452d82267394fad4086e0
-```
-
-Unpack it so the scripts find it:
+notes](https://www.ingenic.com.cn/news-detail/nid-348.html)). Use r6.0.0
+(235 MB), and unpack it where the scripts look for it:
 
 ```sh
+curl -fO -u "ingenic_public:$INGENIC_FTP_PASS" \
+  ftp://ftp.ingenic.com.cn/Ingenic-MIPS-Toolchain/releases/ingenic-mips-toolchain-r6.0.0/mips-xburst2-linux-toolchain-r6.0.0.tar.bz2
+echo "4e3359e32c2fb7d9e573ce84370220a66e3998bb911452d82267394fad4086e0  mips-xburst2-linux-toolchain-r6.0.0.tar.bz2" | sha256sum -c
 mkdir -p ~/ing && tar -xjf mips-xburst2-linux-toolchain-r6.0.0.tar.bz2 -C ~/ing
-ls ~/ing/mips-xburst2-linux-toolchain-r6.0.0/bin/mips-xburst2-linux-gnu-gcc
 ```
 
 **X2600 6.6 SDK** (the kernel source), 680 MB, in
 `/DevSupport/X2600E/01_SW/06_kernel6.6_x2600-sdk_v1.0-20250221/` (details in
 `kernel/SOURCE.md`). You don't need to fetch it yourself: step 5 downloads it
-if you export the password first.
-
-```sh
-export INGENIC_FTP_PASS=...                 # or put the tarball in a directory
-export INGENIC_SDK_DIR=~/ingenic-sdk        # and point INGENIC_SDK_DIR at it
-```
+into `INGENIC_SDK_DIR` (set it, e.g. `export INGENIC_SDK_DIR=~/ingenic-sdk`),
+or uses the tarball if it is already there.
 
 ## 3. Clone the repositories side by side
 
@@ -62,8 +58,9 @@ chainload/build.sh            # chainload.ko for stock's kernel -> chainload/out
 ```
 
 `chainload/build.sh` also needs Ingenic's 5.10 kernel tree, prepared the way
-`chainload/README.md` describes (the X2600 SDK `v2.0-20230906`, the
-`03_...` directory next to the 6.6 SDK on the FTP server).
+`chainload/README.md` describes. It comes from the X2600 SDK v2.0-20230906:
+`/DevSupport/X2600E/01_SW/03_kernel4.4.94_kernel5.10_x2600-sdk_v2.0-20230906/00_ingenic-linux-kernel4.4.94-kernel5.10-x2600-v2.0-20230906/`
+(`md5sum.txt` next to the tarball).
 
 ## 5. Build the OpenWrt image
 
