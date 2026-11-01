@@ -11,7 +11,7 @@ bring-up is verified on hardware.
 
 - `docs/install.md`: backup, install, test boot, going back to stock
 - `docs/recovery.md`: safety mechanisms and every failure case
-- `docs/build.md`: building in WSL
+- `docs/build.md`: building the image and the install stick
 - `docs/printer-facts.md`: what the printer was observed to do
 
 ## Phase 0 (read-only capture)

@@ -4,7 +4,7 @@
 # GPT, and partx to find partitions by GPT name (slot.sh) and to tell the
 # kernel about the changed partitions (BLKPG; sfdisk
 # only tries BLKRRPART, which fails while the disk is in use). Stock has only
-# busybox fdisk. Runs in WSL.
+# busybox fdisk.
 #
 #   installer/tools/build.sh
 #

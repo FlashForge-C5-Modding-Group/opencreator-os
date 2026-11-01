@@ -1,8 +1,8 @@
 # Building opencreator-os
 
-Everything builds in WSL2 (Ubuntu 24.04). Build trees live in the WSL home
-(`~/build/opencreator-os`, regenerable, ~40 GB); artifacts are copied to
-`F:/creator5-dev/opencreator-os-builds/<version>/`.
+Any x86-64 Linux (tested on Ubuntu 24.04). The OpenWrt build tree needs about
+40 GB in `WORK` (default `~/build/opencreator-os`); the first build takes
+hours, later ones minutes.
 
 ## Prerequisites
 
@@ -13,35 +13,37 @@ sudo apt install build-essential clang flex bison g++ gawk gcc-multilib \
   python3-pil squashfs-tools shellcheck
 ```
 
-The Ingenic SDK tarball is expected at
-`/mnt/d/ingenic/X2600/06_kernel6.6_x2600-sdk_v1.0-20250221/` (see
-`kernel/SOURCE.md`). If it is missing, `kernel/prepare.sh` downloads it from
-Ingenic's public FTP; export the password from your notes first:
+- Ingenic xburst2 toolchain r6.0.0 in `~/ing/mips-xburst2-linux-toolchain-r6.0.0`
+  (or set `TC` and, for the app, `INGENIC_TOOLCHAIN`).
+- Ingenic X2600 6.6 SDK tarball (see `kernel/SOURCE.md`): set
+  `INGENIC_SDK_DIR` to the directory holding it, or export `INGENIC_FTP_PASS`
+  and `kernel/prepare.sh` downloads it.
+- For `chainload.ko` only: the Ingenic 5.10 kernel tree and its prepared build
+  directory (`KSRC`, `KOUT`; see `chainload/README.md`).
+- The `os-installer` repository next to this one.
+
+## Build and make a stick
 
 ```sh
-export INGENIC_FTP_PASS=...
-```
-
-## Build
-
-```sh
-cd /mnt/f/creator5-dev/opencreator/opencreator-os
-./build.sh                      # OpenWrt image (kernel.uimage, root.squashfs, sysupgrade.tar)
-chainload/build.sh              # chainload.ko for the stock 5.10 kernel
-installer/tools/build.sh        # static util-linux sfdisk + partx for the install stick
-(cd ../os-installer && make mips32)   # touchscreen app (optional on the stick)
+export OUT=~/opencreator-os-builds          # where images go
+./build.sh                                  # -> $OUT/<version>/ (version = git describe)
+chainload/build.sh                          # once: chainload.ko
+installer/tools/build.sh                    # once: static sfdisk + partx
+(cd ../os-installer && make mips32)         # touchscreen app
 tools/make-install-stick.sh --app ../os-installer/build/mips32/os-installer \
-    /mnt/f/creator5-dev/opencreator-os-builds/<version> /tmp/stick
+    "$OUT/$(git describe --always --dirty --tags)" stick/
 ```
 
-`installer/tools/build.sh` downloads util-linux 2.40.2 (checksum pinned) and
-builds it with the Ingenic toolchain (`TC`, default
-`~/ing/mips-xburst2-linux-toolchain-r6.0.0`) into `installer/tools/out/`;
-`make-install-stick.sh` refuses to run without it. The app lives in the
-separate `os-installer` repository (`make mips32` for the printer, `make sdl`
-for the PC). `tools/ui-demo.sh APP VERSION_DIR` runs the SDL build under WSLg
-against the real installer and a loop-mounted image laid out like the
-printer's eMMC (needs sudo; a backup in the demo writes about 7.3 GB).
+Copy the **contents** of `stick/` to the root of a FAT32 USB stick (16 GB if
+you want the installer's eMMC backup, about 7.5 GB), then check the copy from its
+root: `sha256sum -c --quiet SHA256SUMS`. Without `--app` the stick runs
+headless; `--authorized-keys FILE` adds SSH keys. Installing: `install.md`.
+
+Optional: `OWRT_BUILDS=$OUT test/qemu/run.sh -j 8` runs the QEMU system tests
+(about 45 min; see `test/qemu/README.md`). `tools/ui-demo.sh APP VERSION_DIR`
+runs the PC (`make sdl`) build of the app against the real installer and a
+loop-mounted image laid out like the printer's eMMC (needs sudo and about
+15 GB).
 
 `build.sh` clones OpenWrt v24.10.8 into `$WORK/openwrt`, applies the small
 source fixes in `patches/openwrt/` (idempotently, with no patch fuzz), copies

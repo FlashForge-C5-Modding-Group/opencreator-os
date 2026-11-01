@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build chainload.ko for the stock Creator 5 Pro kernel (5.10.186+) and
-# check its module ABI against stock. Runs in WSL.
+# check its module ABI against stock.
 #
 #   chainload/build.sh
 #

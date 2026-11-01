@@ -1,10 +1,10 @@
 #!/bin/bash
-# Build opencreator-os (OpenWrt 24.10 + Ingenic SDK 6.6 kernel) in WSL.
+# Build opencreator-os (OpenWrt 24.10 + Ingenic SDK 6.6 kernel) on Linux.
 #
 #   ./build.sh [--menuconfig] [--kernel-menuconfig] [--clean-kernel]
 #
 # Env: WORK (default ~/build/opencreator-os)  build trees (regenerable)
-#      OUT  (default /mnt/f/creator5-dev/opencreator-os-builds)  artifacts
+#      OUT  (default /mnt/f/creator5-dev/opencreator-os-builds; set it)  artifacts
 #      JOBS (default nproc)
 #      INGENIC_FTP_PASS  only if the SDK tarball must be downloaded
 set -euo pipefail
