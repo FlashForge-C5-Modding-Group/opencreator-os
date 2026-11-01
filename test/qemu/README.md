@@ -19,8 +19,9 @@ host CPU under TCG. Scenarios using `prepare_committed` wait for S2's image;
 without S2, the first builds it and the others wait. Remaining scenarios
 start longest first, using the last passing durations in
 `$QWORK/scenario-times`. Terminal output is prefixed by scenario;
-`scenario.log` contains only that scenario. S12's whole-eMMC backup takes
-12–14 minutes; the rest finish in about 10 minutes.
+`scenario.log` contains only that scenario. S12 usually dominates: a measured
+standalone run took about 13 minutes for four boots, including about 8 minutes
+for its initial whole-eMMC backup/repartition/install boot.
 
 ## Prerequisites
 
