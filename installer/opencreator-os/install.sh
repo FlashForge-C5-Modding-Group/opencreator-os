@@ -1047,7 +1047,7 @@ openwrt_main() {
 			ui_info repair-stock "Checking the saved stock slot..."
 			# shellcheck source-path=SCRIPTDIR source=restore.sh
 			. "$SELF_DIR/restore.sh"
-			mountpoint -q "$C5_DATA" || finish failed "Stock repair FAILED\nc5os is not mounted at $C5_DATA." 1
+			c5_is_mountpoint "$C5_DATA" || finish failed "Stock repair FAILED\nc5os is not mounted at $C5_DATA." 1
 			c5_restore_stock "$OCDIR/stock" "$CHECK" ||
 				finish failed "Stock repair FAILED\n${C5_WHY:-Cannot restore stock.}" 1
 		fi
