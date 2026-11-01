@@ -13,7 +13,7 @@
 # the SPL compares the first 11 bytes), c5os = OpenWrt's /data.
 #
 # Overridable for testing: C5_DISK, C5_PARTX, C5_CMDLINE_FILE, C5_SYSBLOCK,
-# C5_KMSG, C5_MOUNTS, C5_DROP_CACHES, C5_DATA, C5_OCDIR, C5_UDATA,
+# C5_KMSG, C5_MOUNTS, C5_DROP_CACHES, C5_DATA, C5_OCDIR,
 # C5_TEST_DEADLINE (also from the kernel command line: the kernel passes
 # C5_TEST_DEADLINE=N to init's environment).
 
@@ -25,9 +25,7 @@ C5_KMSG=${C5_KMSG:-/dev/kmsg}
 C5_MOUNTS=${C5_MOUNTS:-/proc/mounts}
 C5_DROP_CACHES=${C5_DROP_CACHES:-/proc/sys/vm/drop_caches}
 C5_DATA=${C5_DATA:-/data}                       # c5os mount point (fstab)
-C5_OCDIR=${C5_OCDIR:-$C5_DATA/opencreator-os}   # logs, pending-commit, sysupgrade.tgz
-# Transient mount for the stock restore source and staged chainload kernel.
-C5_UDATA=${C5_UDATA:-/tmp/c5-userdata}
+C5_OCDIR=${C5_OCDIR:-$C5_DATA/opencreator-os}   # logs, stock, chainload, pending-commit, sysupgrade.tgz
 C5_BOOTLOG_SECTOR=128      # bootlog lives at 64 KiB inside the ota partition ...
 C5_BOOTLOG_SECTORS=128     # ... and is 64 KiB long
 C5_BOOTLOG_MAGIC=C5BOOTLOG1

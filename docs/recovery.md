@@ -115,18 +115,31 @@ For a changed kernel, sysupgrade requires selectable stock. Before writing
 it removes the old saved chainload kernel and pending commit, points the
 flag at stock and resets the counter. It writes and reads back the new
 image, copies the new kernel to `opencreator-os/chainload/kernel.uimage` on
-`userdata` (stock's `/usr/data`), and writes `pending-commit` on `c5os`
-(slot, version, date, checksums). If saving these fails, sysupgrade fails;
-reinstall from stock with an install stick. The next boot is **stock**.
+`c5os`, and writes `pending-commit` there
+(slot, version, date, checksums). OpenWrt never mounts `userdata` for an
+upgrade or repair. If saving these fails, sysupgrade fails;
+reinstall from stock with a new install stick. The next boot is **stock**.
 The new image becomes the default only after a healthy boot with its own
 slot kernel commits it. Inspect the marker:
 `cat /data/opencreator-os/pending-commit`. To test from stock:
 
-- Over SSH, run
-  `sh /usr/data/opencreator-os/chainload/c5-chainload.sh stage /dev/mmcblk0pN`,
-  then `sh /usr/data/opencreator-os/chainload/c5-chainload.sh go`.
-  Use the OpenWrt rootfs printed by sysupgrade: `p2` for slot 1, `p4` for
-  slot 2. `stage` uses the saved new kernel and should report `commit: yes`.
+- Over SSH on stock, mount `c5os` read-only without journal replay and stage
+  the saved kernel before jumping:
+
+  ```sh
+  mkdir -p /tmp/c5os-config
+  mount -t ext4 -o ro,noload /dev/mmcblk0p8 /tmp/c5os-config &&
+      sh /tmp/c5os-config/opencreator-os/chainload/c5-chainload.sh stage /dev/mmcblk0p2 &&
+      sh /tmp/c5os-config/opencreator-os/chainload/c5-chainload.sh go
+  ```
+
+  These are the reference printer's partitions: use the OpenWrt rootfs
+  printed by sysupgrade (`p2` for slot 1, `p4` for slot 2), and the actual
+  GPT `c5os` device if not `p8`. If `c5os` is already mounted by the
+  installer at `/tmp/c5os-config`, do not mount it again.
+  `stage` uses the saved new kernel and should report `commit: yes`.
+  `go` remounts `/tmp/c5os-config` read-only before the jump; it keeps the
+  script available there while the detached shutdown process runs.
 - With an install stick, use "Swap to OpenWrt" to test the slot's own
   kernel. "Install" skips writing if the slot already holds the same build;
   a different build rewrites the slot first.
@@ -170,9 +183,10 @@ dd if=/dev/mmcblk0p5 bs=512 skip=128 count=128 2>/dev/null | tr -d '\000'
 
 The first line is the marker `C5BOOTLOG1`. Each healthy boot also stores
 `dmesg`, `logread` and the boot log in `/data/opencreator-os/logs/` on
-`c5os`. Stock does not mount `c5os`; to read them there:
-`mkdir -p /tmp/c5os-ro && mount -t ext4 -o ro /dev/mmcblk0p8 /tmp/c5os-ro`,
-then `/tmp/c5os-ro/opencreator-os/logs/`. `/data` has no `userdata` fallback:
+`c5os`. Outside the installer, stock leaves `c5os` unmounted; to read them:
+`mkdir -p /tmp/c5os-ro && mount -t ext4 -o ro,noload /dev/mmcblk0p8 /tmp/c5os-ro`,
+then `/tmp/c5os-ro/opencreator-os/logs/`. Unmount with `umount /tmp/c5os-ro`
+afterwards. `/data` has no `userdata` fallback:
 the fixed fstab mounts only ext4 label `c5os` (`rw,noatime`).
 
 ## What exists to recover with
@@ -181,9 +195,9 @@ the fixed fstab mounts only ext4 label `c5os` (`rw,noatime`).
 |------|-------|---------|
 | Full eMMC backup (`first-mib.bin`, `kernel.img`, `rootfs.img`, `kernel2.img`, `rootfs2.img`, `ota.img`, `usershare.img`, optionally `userdata.img`, `SHA256SUMS`, `MANIFEST.txt`, `partmap.txt`) | `<date>-creator5pro-emmc/` on the PC (read-only) | `tools/printer/phase0.sh --backup` on the printer, joined and checked with `tools/verify-backup.sh` |
 | Whole-eMMC backup made by the installer (the same format with `userdata` at full size, plus `disk-tail.img` and `VERIFIED`) | `emmc-backup/` on the install stick; import it with `tools/verify-backup.sh` (`install.md`) | `install.sh` ("Back up" in the touchscreen installer), before it creates `c5os` |
-| Stock slot saved at install time (`kernel.img` = whole stock kernel partition, `rootfs.squashfs` = stock squashfs, `SHA256SUMS` or `MD5SUMS`, `MANIFEST.txt`) | `userdata`: `/usr/data/opencreator-os/stock/` on stock; OpenWrt mounts `userdata` read-only at `/tmp/c5-userdata` to use it | `install.sh` |
+| Stock slot saved at install time (`kernel.img` = whole stock kernel partition, `rootfs.squashfs` = stock squashfs, `SHA256SUMS` or `MD5SUMS`, `MANIFEST.txt`) | `c5os`: `/data/opencreator-os/stock/` on OpenWrt; `/tmp/c5os-config/opencreator-os/stock/` while the stock installer mounts it | `install.sh`, saving the running stock slot and checking the copy |
 | Install stick: Update / Repair OpenWrt / Swap to stock / Repair stock | OpenWrt's USB hook; headless `opencreator-os/ACTION` | `tools/make-install-stick.sh` |
-| `c5-chainload.sh` + `chainload.ko` | stock, `/usr/data/opencreator-os/chainload/` | `install.sh` |
+| `c5-chainload.sh` + `chainload.ko` + slot kernel `kernel.uimage` | `c5os`, `opencreator-os/chainload/`; stock accesses it at `/tmp/c5os-config/opencreator-os/chainload/` | `install.sh`; changed-kernel sysupgrade replaces the saved kernel on `c5os` |
 | Stock-side restore stick (`opencreator-os-restore/`) | runs from stock's USB hook | `tools/make-restore-stick.sh` |
 | Slot, counter and boot-log shell helpers | OpenWrt, `/lib/c5/slot.sh` (also on the install stick as `opencreator-os/slot.sh`) | this repo |
 | Verified stock-slot repair helpers | install stick, `opencreator-os/restore.sh` (needs the stick's `lib.sh` and `slot.sh`) | `tools/make-install-stick.sh` |
@@ -242,7 +256,7 @@ Put one word in the stick's `opencreator-os/ACTION`:
 |----------|--------|
 | `update` | Verifies `sysupgrade.tar` against `SHA256SUMS`, tests it with `sysupgrade -T`, then updates (or reinstalls the same build) with the configuration kept, except the image-owned `/etc/config/fstab`, which is reset to the image's. |
 | `swap` | Refuses unselectable stock, clears `pending-commit`, resets the counter, selects stock and reboots. |
-| `repair-stock` | Mounts `userdata` read-only without journal replay, verifies the saved `opencreator-os/stock/` images, repairs stock's kernel and rootfs, then selects stock and reboots only if selectable. |
+| `repair-stock` | Requires `c5os` mounted at `/data`, verifies `/data/opencreator-os/stock/`, repairs stock's kernel and rootfs, then selects stock and reboots only if selectable. Never mounts `userdata`. |
 
 Windows line endings are accepted. Headless OpenWrt with no `ACTION` does
 nothing; headless stock defaults to `install`. Stock supports `install` and
@@ -251,9 +265,10 @@ uninstall action. Remove the stick after use: its action is not consumed.
 The log is `opencreator-os-install.log` on the stick, and
 `/data/opencreator-os/install.log` on OpenWrt.
 
-Repair takes its images from the saved copy on `userdata`, not from the
-stick. If that copy is lost, use the PC backup with the SSH helpers below.
-It does not restore `usershare`.
+Repair takes its images from `/data/opencreator-os/stock/` on `c5os`, not
+from the stick. It never falls back to the old copy on `userdata`. If the
+copy is missing, migrate an existing printer below or use the PC backup
+with the SSH helpers. Repair does not restore `usershare`.
 
 `update` ignores `sysupgrade`'s exit status: a successful handover stops
 ubusd, so it returns "Connection failed". The installer waits up to 60 s
@@ -262,6 +277,136 @@ reports "Update / Repair FAILED".
 
 Stock-side reboots use `sync; reboot -f`, because stock's init is still
 blocked in the synchronous USB hook. OpenWrt reboots normally.
+
+### Migrating an existing printer from the old `userdata` layout
+
+**Normal OpenWrt operation must never mount `userdata`.** There is no
+automatic migration or compatibility fallback. Older installations may
+still have `stock/`, `chainload/` and installer state under
+`/usr/data/opencreator-os/` on stock; the new location is
+`opencreator-os/` on `c5os`. Do not erase the old files to begin migration.
+
+**Preferred: reinstall from working stock with a newly generated stick.**
+This avoids mounting `userdata` on OpenWrt and refreshes the chainload
+helpers as well as the saved stock copy:
+
+1. Use the current checkout and an image containing the no-`userdata`
+   changes. Existing image artifacts live under
+   `/mnt/f/creator5-dev/opencreator-os-builds/`; the directory name or
+   `-dirty` suffix alone does not prove which source changes they contain.
+   Build a new image if necessary (`build.md`). Regenerate the stick so
+   its installer and chainload scripts also come from the current checkout;
+   merely replacing an old stick's image is not enough. In WSL, from this
+   repository, with `VERSION_DIR` set to the chosen build directory:
+
+   ```sh
+   : "${VERSION_DIR:?Set VERSION_DIR to the no-userdata image build directory}"
+   tools/make-install-stick.sh --app ../os-installer/build/mips32/os-installer \
+       "$VERSION_DIR" /tmp/c5os-migration-stick
+   ```
+
+   The output directory must be new or empty. Copy its contents to a FAT32
+   stick's root. Omit `--app` and its argument for a headless stick only
+   when `c5os` already exists.
+2. Boot stock. If currently on OpenWrt and stock is selectable, use the new
+   stick's **Swap to stock** action (`ACTION=swap` headlessly). Then remove
+   that action file or replace it with `install` before booting stock again.
+3. On stock, use **Install / update opencreator-os** (headless:
+   `ACTION=install`). The installer reuses existing `c5os`; it does not
+   shrink `userdata` again. It saves and verifies the running stock slot
+   directly to `c5os`, writes/skips the OpenWrt slot according to payload
+   checksums, installs current chainload helpers and the slot kernel on
+   `c5os`, and test-boots OpenWrt as usual. Reinstallation can reset the
+   OpenWrt slot overlay; keep a separate backup of configuration you need.
+4. After a healthy boot, check the saved copy without writing a slot:
+
+   ```sh
+   (
+       set -eu
+       SELF_DIR=/mnt/opencreator-os  # new install stick mounted at /mnt
+       . "$SELF_DIR/lib.sh"
+       . "$SELF_DIR/restore.sh"
+       c5_restore_stock /data/opencreator-os/stock 1
+       test -s /data/opencreator-os/chainload/c5-chainload.sh
+       test -s /data/opencreator-os/chainload/chainload.ko
+       test -s /data/opencreator-os/chainload/kernel.uimage
+   )
+   ```
+
+   Expect checksum checks and the stock slot mapping, without any
+   `writing ...` messages. Remove the stick when finished. Keep the legacy
+   `userdata` copy until the new installation and saved images are verified;
+   it is no longer used.
+
+**One-off manual exception, only if explicitly authorized by the user:**
+copy the legacy saved stock images from OpenWrt using a single
+`ro,noload` mount. This is useful when stock needs repair before it can
+run the preferred reinstall. It is a recovery operation, not permission
+for boot scripts, the installer on OpenWrt, repair or sysupgrade to mount
+`userdata`. Do not add it to startup or fstab.
+
+Mount the newly generated install stick at `/mnt`
+(`mount -t vfat /dev/sda1 /mnt`, adjusting the USB device if needed), then
+run this entire subshell over SSH on OpenWrt. It discovers both eMMC
+partitions by GPT name, requires writable `c5os` at `/data`, rejects an
+already mounted `userdata` and refuses to overwrite an existing
+destination or interrupted `.new` copy:
+
+```sh
+(
+    set -eu
+    SELF_DIR=/mnt/opencreator-os
+    . "$SELF_DIR/lib.sh"
+    . "$SELF_DIR/restore.sh"
+    c5dev=$(c5_part_dev c5os)
+    uddev=$(c5_part_dev userdata)
+    awk -v d="$c5dev" '$1 == d && $2 == "/data" && $3 == "ext4" &&
+        $4 ~ /(^|,)rw(,|$)/ { ok = 1 } END { exit !ok }' /proc/mounts
+    if c5_mounted "$uddev"; then
+        echo "userdata is already mounted; stop and resolve it first" >&2
+        exit 1
+    fi
+    mnt=/tmp/c5-userdata-migrate
+    src=$mnt/opencreator-os/stock
+    dst=/data/opencreator-os/stock
+    for p in "$dst" "$dst.new"; do
+        if [ -e "$p" ] || [ -L "$p" ]; then
+            echo "refusing to replace $p; inspect and preserve it first" >&2
+            exit 1
+        fi
+    done
+    mkdir "$mnt"
+    mounted=0
+    trap 'if [ "$mounted" = 1 ]; then umount "$mnt" || exit 1; fi; rmdir "$mnt"' EXIT
+    mount -t ext4 -o ro,noload "$uddev" "$mnt"
+    mounted=1
+    c5_restore_stock "$src" 1
+    mkdir -p /data/opencreator-os
+    mkdir "$dst.new"
+    cp -a "$src/." "$dst.new/"
+    sync
+    c5_restore_stock "$dst.new" 1
+    mv "$dst.new" "$dst"
+    sync
+    c5_restore_stock "$dst" 1
+)
+```
+
+All three `c5_restore_stock ... 1` calls are **check-only**: they require
+matching entries for both images in `SHA256SUMS` (or `MD5SUMS`), check
+image magics, slot mapping and target sizes, and do not write partitions
+or the boot flag. The source on `userdata` is never modified; promotion
+from `stock.new` happens only after destination verification. Any failure
+stops the sequence and unmounts `userdata`; a failed copy may leave
+`stock.new` for inspection. Do not blindly rerun or remove an existing
+saved copy. A source-checksum failure requires a known-good PC backup,
+not a newly generated checksum list for corrupt files.
+
+This manual step migrates **saved repair images only**, not old runtime
+scripts, state or chainload helpers. Use the new stick's **Repair stock**
+if needed, then complete the stock-side reinstall above to install current
+helpers and the no-`userdata` image. Do not copy the old chainload scripts
+to `c5os` or use a legacy sysupgrade path as the cutover.
 
 ## Failure cases
 
@@ -347,11 +492,14 @@ repair leaves stock marked invalid and OpenWrt selected. If the flag already
 points at broken stock, see case 7.
 
 - Use the install stick with `ACTION=repair-stock`. It verifies the saved
-  copy in `opencreator-os/stock/` on `userdata` and reads every write back.
-- If `userdata` or the saved copy is bad, copy the stock slot's images from
-  the PC backup into `/data/stock-restore/` over SSH. Name them `kernel.img`
+  copy in `/data/opencreator-os/stock/` on `c5os` and reads every write back.
+- If `c5os` or its saved copy is bad, use a repaired, mounted `/data` and
+  copy the stock slot's images from the PC backup into
+  `/data/stock-restore/` over SSH. Name them `kernel.img`
   and `rootfs.squashfs` and create a matching `SHA256SUMS` on the PC before
-  copying. With the install stick mounted (`mount -t vfat /dev/sda1 /mnt`),
+  copying. For an older printer whose only saved copy is on `userdata`,
+  use the explicitly authorized one-off migration above.
+  With the install stick mounted (`mount -t vfat /dev/sda1 /mnt`),
   the verified helper can check first, then repair:
 
   ```sh
@@ -445,25 +593,34 @@ stored model is unavailable.
 
 Over SSH, with p8 unmounted, run `e2fsck -f /dev/mmcblk0p8`. If repair fails,
 `mkfs.ext4 -F -L c5os /dev/mmcblk0p8` creates an empty filesystem,
-**destroying** logs, imported settings/model, the good-kernel record,
-pending commit and sysupgrade backup. `/etc` remains in the slot overlay.
+**destroying** saved stock images, chainload helpers/kernel, installer
+state/logs, imported settings/model, the good-kernel record, pending commit,
+swap file and sysupgrade backup. `/etc` remains in the slot overlay.
 Re-run the stock install stick to populate `c5os` and create a pending
 commit; healthy normal boots alone do not change the flag.
 The installer's backup predates `c5os`; phase0 does not back it up.
-Stock does not otherwise use it.
+Outside the installer and manual recovery, stock leaves `c5os` unmounted.
 
-`userdata` (stock's `/usr/data`) holds stock data, saved stock images in
-`opencreator-os/stock/` and the staged chainload kernel. OpenWrt's imported
-settings/model live on `c5os`. OpenWrt leaves `userdata` unmounted; repair
-it over SSH with `e2fsck -f /dev/mmcblk0p7`.
-**Do not write it from stock**, which has it mounted.
+`userdata` (stock's `/usr/data`) holds stock's own data. The only
+opencreator-os files kept there by the stock installer are the pre-`c5os`
+`/usr/data/opencreator-os/install.log` and partition-creation reboot marker
+`/usr/data/opencreator-os/c5os-rebooted`. Once `c5os` is mounted, normal
+installer state/logs, saved stock and chainload files live on `c5os`.
+Stock Wi-Fi import may still read stock's settings on `/usr/data`.
+OpenWrt never mounts `userdata` in normal operation, including stock
+repair and sysupgrade. Old saved images may remain there on an unmigrated
+printer; see the migration procedure above.
+
+With `userdata` unmounted on OpenWrt, repair it over SSH with
+`e2fsck -f /dev/mmcblk0p7`. **Do not write it from stock**, which has it
+mounted.
 
 Pre-repartition `userdata.img` backups, including the installer's
 `emmc-backup/` and pre-install phase0 `--all` backups, exceed the shrunk
 partition and cannot be restored. For a post-repartition backup, use
 `ssh root@PRINTER 'dd of=/dev/mmcblk0p7 bs=1M conv=fsync' < userdata.img`,
-then check it as below. Use the PC backup for case 5 if saved stock images
-are lost.
+then check it as below. Lost saved stock images belong on `c5os`;
+restore them from the PC backup as in case 5, not into `userdata`.
 
 ### 11. Creating `c5os` fails or is interrupted
 

@@ -27,7 +27,7 @@
 # line and the test boot leaves the flag alone.
 #
 # Files: chainload.ko and kernel.uimage in the same directory as this script
-# (normally /usr/data/opencreator-os/chainload/). BusyBox ash.
+# (normally c5os mounted at /tmp/c5os-config/opencreator-os/chainload/). BusyBox ash.
 # C5CL_EXTRA: words appended to the new command line; only c5.* words accepted.
 # C5CL_WDT: seconds from the jump until the watchdog resets a hung kernel
 # (default 120, 0 = off, at most 1431); the new kernel keeps it fed.
@@ -261,7 +261,7 @@ go_now() {
 	killall wpa_supplicant hostapd udhcpc dhcpcd 2>/dev/null
 	sleep 2
 	sync
-	for m in /usr/data /usr/prog; do
+	for m in /usr/data /usr/prog /tmp/c5os-config; do
 		mountpoint -q "$m" && mount -o remount,ro "$m" 2>/dev/null
 	done
 	mountpoint -q /mnt && umount /mnt 2>/dev/null

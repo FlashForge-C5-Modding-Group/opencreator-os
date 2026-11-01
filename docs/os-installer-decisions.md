@@ -25,8 +25,10 @@ stock file; **Decided** = agreed with the user; **Hypothesis** = not verified.
 - **Decided:** OpenWrt keeps `/etc` in its slot overlay; packages, Klipper,
   Moonraker, logs and gcode go on `c5os`. The installer saves Wi-Fi settings,
   optional SSH keys and the model there; preinit imports them before
-  uci-defaults. `userdata` holds saved stock images and the staged chainload
-  kernel; OpenWrt mounts it only briefly.
+  uci-defaults. Saved stock images, installer state and the staged chainload
+  kernel also live on `c5os`; OpenWrt never mounts stock `userdata`.
+  Stock retains only its pre-c5os installer log and partition-reboot marker
+  on `userdata`, alongside stock's own files.
 
 ## Installer
 

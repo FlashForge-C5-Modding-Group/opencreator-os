@@ -17,8 +17,11 @@ jump() {
 	exec >/dev/console 2>&1
 	sync
 	# the real go-now remounts these read-only before the jump
-	for m in /usr/data /usr/prog; do mount -o remount,ro "$m" 2>/dev/null; done
+	for m in /usr/data /usr/prog /tmp/c5os-config; do
+		mount -o remount,ro "$m" 2>/dev/null
+	done
 	sync
+	awk '$2 == "/tmp/c5os-config" { print "QEMU-CHAINLOAD-MOUNT " $0 }' /proc/mounts
 	echo "QEMU-CHAINLOAD root=$(cat "$STATE.root") cmdline=$(cat "$STATE.cmdline")"
 	poweroff -f
 }

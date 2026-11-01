@@ -150,6 +150,25 @@ boot without it, unless less than 64 MiB would stay free
 and before sysupgrade, so `c5os` unmounts cleanly. The file lives on `c5os`
 and survives sysupgrade.
 
+`c5os` also owns all normal installer state/logs and recovery files under
+`opencreator-os/`: `stock/` holds the verified saved stock kernel/rootfs
+and checksum list, and `chainload/` holds `c5-chainload.sh`, `chainload.ko`
+and the saved OpenWrt `kernel.uimage`. Stock's installer mounts this
+filesystem at `/tmp/c5os-config`; OpenWrt uses `/data`. Stock chainload
+stages its image/module before `go` remounts `c5os` read-only. Changed-kernel
+sysupgrade stages its kernel and pending commit on `c5os`; stock repair
+reads `/data/opencreator-os/stock/` directly, only after confirming `/data`
+is mounted. Neither operation mounts `userdata` or falls back to an old
+copy there.
+
+The stock installer still reads stock settings from `/usr/data` and may
+resize `userdata` when creating `c5os`. Its only persistent files left on
+`userdata` are `/usr/data/opencreator-os/install.log` before `c5os` is
+available and `/usr/data/opencreator-os/c5os-rebooted` for the partition
+creation reboot. Once `c5os` is mounted, normal state and logging use it.
+Normal OpenWrt operation never mounts `userdata`. Existing printers need
+an explicit migration; see [recovery.md](recovery.md#migrating-an-existing-printer-from-the-old-userdata-layout).
+
 Preinit (`79_c5_import`) copies `model`, `wifi.conf` and `authorized_keys`
 from `c5os`'s `opencreator-os/` into `/etc/c5/` and `/etc/dropbear/` when the
 destination is empty, and stages a saved `sysupgrade.tgz`.

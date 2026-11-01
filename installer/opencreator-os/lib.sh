@@ -80,7 +80,7 @@ reboot_now() {
 
 # --- logging -----------------------------------------------------------------
 
-# NO_DATA_LOG=1 while userdata is unmounted (its mount point must stay empty)
+# NO_DATA_LOG=1 while stock userdata is unmounted or its backup is read.
 log() {
 	log_line="$(date '+%F %T') $*"
 	printf '%s\n' "$*"

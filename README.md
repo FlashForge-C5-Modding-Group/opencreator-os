@@ -15,6 +15,21 @@ watchdog reset and the boot-counter fallback. System tests:
 - `docs/image.md`: kernel, packages and base files
 - `docs/printer-facts.md`: observed printer behaviour
 
+Runtime data and recovery files live on the ext4 `c5os` partition, mounted
+at `/data` on OpenWrt: `/data/opencreator-os/stock/` is the verified saved
+stock slot, and `/data/opencreator-os/chainload/` holds the stock-side
+chainload helpers and saved OpenWrt kernel. The stock installer mounts
+`c5os` at `/tmp/c5os-config`. Normal OpenWrt operation, including repair
+and sysupgrade, never mounts stock `userdata` and has no fallback to it.
+Stock-side pre-`c5os` `install.log` and the partition-creation
+`c5os-rebooted` marker remain under `/usr/data/opencreator-os/`; normal
+installer state/logs move to `c5os` once it is mounted.
+
+Upgrading a printer with the old saved-copy layout requires an explicit
+[migration](docs/recovery.md#migrating-an-existing-printer-from-the-old-userdata-layout).
+Prefer reinstalling from stock using a newly generated install stick;
+automatic reads from the old `userdata` copy are intentionally absent.
+
 ## Phase 0 (read-only capture)
 
 Copy `tools/printer/runFirmwareExe.sh` and `tools/printer/phase0.sh` to the

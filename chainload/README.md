@@ -127,17 +127,40 @@ before staging.
 
 ## Usage (on stock, over SSH)
 
-Put `chainload.ko`, `c5-chainload.sh` and the OpenWrt `kernel.uimage` in
-one directory, normally `/usr/data/opencreator-os/chainload/`, where the
-installer places them.
+The installer saves `chainload.ko`, `c5-chainload.sh` and the OpenWrt
+`kernel.uimage` together on **`c5os`**, under
+`opencreator-os/chainload/`. OpenWrt sees this as
+`/data/opencreator-os/chainload/`; the stock installer mounts `c5os` at
+`/tmp/c5os-config`. There is no `/usr/data` fallback.
+
+For manual use on stock, mount `c5os` read-only without journal replay
+(the reference printer uses `p8`; check the GPT layout on yours):
 
 ```sh
-sh c5-chainload.sh args /dev/mmcblk0p2      # inspect without staging
-sh c5-chainload.sh stage /dev/mmcblk0p2
-sh c5-chainload.sh status
-sh c5-chainload.sh unstage                 # cancel, or:
-sh c5-chainload.sh go                      # SSH drops
+mkdir -p /tmp/c5os-config
+mount -t ext4 -o ro,noload /dev/mmcblk0p8 /tmp/c5os-config
 ```
+
+Do not mount it again if the installer already has it mounted. Run from
+outside that filesystem, using absolute script paths, so your working
+directory does not hold it busy:
+
+```sh
+CL=/tmp/c5os-config/opencreator-os/chainload/c5-chainload.sh
+sh "$CL" args /dev/mmcblk0p2      # inspect without staging
+sh "$CL" stage /dev/mmcblk0p2
+sh "$CL" status
+sh "$CL" unstage                 # cancel, or:
+sh "$CL" go                      # SSH drops
+```
+
+After cancellation or inspection, unmount it with
+`umount /tmp/c5os-config`. For a jump, staging consumes the saved image and
+module before `go` remounts `c5os` read-only. It stays mounted so the
+detached shutdown script remains available. Do not copy legacy helpers from
+`/usr/data/opencreator-os/chainload/`: regenerate the install stick and
+reinstall from stock to migrate an existing printer
+([recovery guide](../docs/recovery.md#migrating-an-existing-printer-from-the-old-userdata-layout)).
 
 `stage ROOTDEV [IMAGE]` does the following:
 
@@ -170,8 +193,10 @@ SIGHUP ignored, and writes its progress to `/dev/console`. In order, it:
 
 1. Stops `firmwareExe`, klippy, moonraker, opencreator, `c5_bridge`,
    `c5_socat`, `wpa_supplicant`, `hostapd`, `udhcpc` and `dhcpcd`.
-2. Syncs, remounts `/usr/data` and `/usr/prog` read-only, and unmounts
-   `/mnt`. Stock `/etc` shares `/usr/prog`'s partition.
+2. Syncs, remounts `/usr/data`, `/usr/prog` and `/tmp/c5os-config`
+   read-only, and unmounts `/mnt`. Stock `/etc` shares `/usr/prog`'s
+   partition. The image/module are already staged; `c5os` stays mounted
+   read-only so the shutdown script can continue running from it.
 3. Takes `wlan0`, `wlan1` and `eth0` down and unloads `8821cu`,
    `rtl8188fu` and `soc_mac_driver`.
 4. Unbinds dwc2 USB controllers to stop DMA into RAM.

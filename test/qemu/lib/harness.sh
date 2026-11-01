@@ -459,6 +459,20 @@ boot() {
 	return "$rc"
 }
 
+# Hash the entire userdata partition, including its ext4 journal, around one
+# real OpenWrt run. boot() waits for QEMU to exit, so the second hash is taken
+# before any later stock boot can legitimately update userdata's journal.
+boot_openwrt() {
+	local name=$1 disk=$2 before after rc
+	before=$(img_part_sum "$disk" 7 $((PSIZE[7] * 512)))
+	boot "$@"
+	rc=$?
+	after=$(img_part_sum "$disk" 7 $((PSIZE[7] * 512)))
+	printf 'before %s\nafter  %s\n' "$before" "$after" > "$RUN/$name.userdata.sha256"
+	check "$name: full userdata partition unchanged by OpenWrt" is_eq "$after" "$before"
+	return "$rc"
+}
+
 # chainload_cmdline NAME -> "cmdline:<command line>" the fake chainload of
 # boot NAME handed over (for boot's ROOT argument)
 chainload_cmdline() {

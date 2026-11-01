@@ -84,13 +84,15 @@ model_read || { echo "install: model mismatch: '$MACHINE $PID'; nothing written"
 action_read || { echo "install: invalid ACTION; nothing written" >&2; exit 1; }
 [ "$CHECK" != 1 ] || NO_DATA_LOG=1
 
-SD=$OCDIR/stock
+C5M=/tmp/c5os-config
+STOCK_OCDIR=$OCDIR
+SD=$C5M/opencreator-os/stock
 MIN_FREE=$((64 * 1024 * 1024))
 VERSION=$(head -n 1 "$STICK/VERSION" 2>/dev/null | tr -d '\r')
 [ -n "$VERSION" ] || VERSION=unknown
 # c5os: userdata's filesystem is shrunk to its new partition size minus
-# UD_FS_MARGIN_MIB, and must keep UD_HEADROOM_MIB free beyond the install's
-# own needs; the backup splits images into BK_CHUNK_MIB files (FAT32).
+# UD_FS_MARGIN_MIB, and must keep UD_HEADROOM_MIB free. Installer images,
+# state and chainload files live on c5os; backup chunks fit FAT32.
 UD_FS_MARGIN_MIB=32
 UD_HEADROOM_MIB=128
 BK_CHUNK_MIB=1024
@@ -183,14 +185,18 @@ preflight() {
 	if [ "$(dev_sum "$TK" "$KSZ")" = "$KSUM" ] && [ "$(dev_sum "$TR" "$RSZ")" = "$RSUM" ]; then
 		UP_TO_DATE=1
 	fi
-	# a previous install of this slot stopped after the image writes but
-	# before the overlay header was cleared: redo the cleanup
+	geometry
+	if [ "$HAVE_C5OS" = 1 ] && c5os_kernel_ok &&
+		tune2fs -l "$C5OS_DEV" 2>/dev/null | grep -q '^Filesystem volume name: *c5os$'; then
+		open_c5os
+	fi
+	# A previous install stopped before the overlay header was cleared.
 	PENDING=0
-	grep -qx "slot=$TGT" "$OCDIR/install-pending" 2>/dev/null && PENDING=1
+	grep -qx "slot=$TGT" "$C5M/opencreator-os/install-pending" 2>/dev/null && PENDING=1
 	# identifies this stick's payload (retry guard of headless hook runs)
 	CL_KEY=$("$SUM" < "$STICK/$SUMS" | cut -c1-16)
 
-	# running stock slot, saved to userdata before anything is written
+	# Running stock slot, saved to c5os before either slot is written.
 	[ "$(magic_str "$ORDEV")" = "$SQUASHFS_MAGIC" ] || abort "running rootfs $ORDEV is not squashfs"
 	OKB=$(c5_part_bytes "$(c5_slot_kname "$OWN")") || abort "cannot read the size of $OKDEV"
 	ORB=$(c5_part_bytes "$(c5_slot_rname "$OWN")") || abort "cannot read the size of $ORDEV"
@@ -211,31 +217,28 @@ preflight() {
 	[ "$STOCK_SAVED" = 1 ] || need=$((need + OKB + BU))
 	[ "$need" -ge "$MIN_FREE" ] || need=$MIN_FREE
 
-	geometry
 	if [ "$HAVE_C5OS" = 0 ]; then
-		# userdata must still fit after the shrink, with headroom; checked
-		# before the menu so a full printer never starts a backup
+		# Checked before the menu so a full printer never starts a backup.
 		UD_USED_MIB=$(($(used_bytes "$C5_DATA" || echo 0) / 1048576))
-		need_mib=$(((need + 1048575) / 1048576))
-		limit=$((UD_SHRINK_MIB - UD_HEADROOM_MIB - need_mib))
+		limit=$((UD_SHRINK_MIB - UD_HEADROOM_MIB))
 		log "check: userdata holds $UD_USED_MIB MiB; at most $limit MiB fit next to c5os"
 		if [ "$UD_USED_MIB" -gt "$limit" ]; then
 			ui_block c5os-space "$(space_text $((UD_USED_MIB - limit)))" "Boot to stock"
 		fi
 	fi
-	check_data_space
+	if mountpoint -q "$C5M"; then check_c5os_space; fi
 
 	INSTALLED=0
-	if grep -q "^written slot=$TGT " "$OCDIR/install.state" 2>/dev/null &&
+	if grep -q "^written slot=$TGT " "$C5M/opencreator-os/install.state" 2>/dev/null &&
 		[ "$(c5_magic_hex "$TK")" = "$UIMAGE_MAGIC" ] && [ "$(magic_str "$TR")" = "$SQUASHFS_MAGIC" ]; then
 		INSTALLED=1
 	fi
 	backup_plan
 }
 
-check_data_space() {
-	free=$(free_bytes "$C5_DATA") || abort "cannot read free space on $C5_DATA"
-	[ "$free" -ge "$need" ] || abort "$C5_DATA has $((free / 1048576)) MiB free, need $((need / 1048576)) MiB"
+check_c5os_space() {
+	free=$(free_bytes "$C5M") || abort "cannot read free space on c5os"
+	[ "$free" -ge "$need" ] || abort "c5os has $((free / 1048576)) MiB free, need $((need / 1048576)) MiB"
 }
 
 space_text() {  # space_text MB -> c5os-space screen text
@@ -300,8 +303,8 @@ save_stock() {
 	rm -rf "$SD.new"
 	mkdir -p "$SD.new" || fail "cannot create $SD.new"
 	dd if="$OKDEV" of="$SD.new/kernel.img" bs=1M 2>/dev/null || fail "reading $OKDEV"
-	# Stock mounts userdata sync: copy full MiB blocks, then only the
-	# squashfs tail, without relying on dd's unsupported count_bytes flag.
+	# Copy full MiB blocks, then the squashfs tail, without relying on
+	# dd's unsupported count_bytes flag.
 	dd if="$ORDEV" of="$SD.new/rootfs.squashfs" bs=1M count=$((BU / 1048576)) 2>/dev/null || fail "reading $ORDEV"
 	if [ $((BU % 1048576)) -ne 0 ]; then
 		dd if="$ORDEV" bs=1M skip=$((BU / 1048576)) count=1 2>/dev/null |
@@ -329,12 +332,8 @@ save_stock() {
 	log "stock: saved and verified ($SUM)"
 }
 
-save_settings() (
-	mnt=/tmp/c5os-config
-	mkdir -p "$mnt" || fail "cannot create $mnt"
-	mount -t ext4 -o rw,noatime "$C5OS_DEV" "$mnt" || fail "cannot mount c5os"
-	trap 'umount "$mnt"; rmdir "$mnt"' EXIT
-	dest=$mnt/opencreator-os
+save_settings() {
+	dest=$OCDIR
 	mkdir -p "$dest" || fail "cannot create $dest"
 	printf '%s %s\n' "$MACHINE" "$PID" > "$dest/model" || fail "cannot write model"
 	wpa=${C5_WPA:-/usr/prog/wifi/wpa_supplicant.conf}
@@ -358,18 +357,37 @@ save_settings() (
 		log "ssh: copied authorized_keys to c5os"
 	fi
 	sync
-)
+}
 
 # c5os_do OPTS CMD...: run CMD with c5os mounted at $C5M with OPTS (the
 # *_in functions run only through it: SC2317)
-C5M=/tmp/c5os-config
 c5os_do() (
+	if mountpoint -q "$C5M"; then shift; "$@"; exit $?; fi
 	mkdir -p "$C5M" || exit 1
 	mount -t ext4 -o "$1" "$C5OS_DEV" "$C5M" || { rmdir "$C5M"; exit 1; }
 	trap 'umount "$C5M"; rmdir "$C5M"' EXIT
 	shift
 	"$@"
 )
+
+# Keep c5os available for stock's transaction state, logs and chainloader.
+# Before it exists, only the stock-side log and partition reboot marker use
+# userdata. The backup temporarily closes c5os so its image is stable.
+open_c5os() {
+	mkdir -p "$C5M" || abort "cannot create $C5M"
+	if [ "$CHECK" = 1 ]; then c5_opts=ro,noload; else c5_opts=rw,noatime; fi
+	mountpoint -q "$C5M" || mount -t ext4 -o "$c5_opts" "$C5OS_DEV" "$C5M" ||
+		abort "cannot mount c5os"
+	OCDIR=$C5M/opencreator-os
+	trap 'umount "$C5M" 2>/dev/null; rmdir "$C5M" 2>/dev/null' EXIT
+}
+close_c5os() {
+	if mountpoint -q "$C5M"; then
+		sync
+		umount "$C5M" || fail "cannot unmount c5os before backup"
+	fi
+	OCDIR=$STOCK_OCDIR
+}
 
 # kernel_good FILE: FILE's uImage is c5os's good-kernel (recorded by the
 # last healthy OpenWrt boot)
@@ -559,6 +577,9 @@ chainload_test() {
 	sync
 	release_stick
 	sync
+	# The detached go-now must still be able to open its script on c5os
+	# after this installer exits. It remounts c5os read-only before jumping.
+	trap - EXIT
 	if [ "$HOOK" = 1 ]; then
 		# "go" backgrounds go-now and returns, and go-now kills every process
 		# whose command line mentions opencreator (this script): the hook would
@@ -719,9 +740,9 @@ c5os_kernel_ok() {
 # c5os_reboot: the kernel still has the old partitions; reboot once and let
 # the stick continue (userdata must be mounted: the marker lives there)
 c5os_reboot() {
-	[ -f "$OCDIR/c5os-rebooted" ] && fail "kernel does not see the new partition table after a reboot"
-	if ! mkdir -p "$OCDIR" || ! : > "$OCDIR/c5os-rebooted"; then
-		fail "cannot write $OCDIR/c5os-rebooted"
+	[ -f "$STOCK_OCDIR/c5os-rebooted" ] && fail "kernel does not see the new partition table after a reboot"
+	if ! mkdir -p "$STOCK_OCDIR" || ! : > "$STOCK_OCDIR/c5os-rebooted"; then
+		fail "cannot write $STOCK_OCDIR/c5os-rebooted"
 	fi
 	log "c5os: the kernel still uses the old partition table; rebooting once"
 	ui_info c5os-reboot "Partition table written\nRebooting once so the kernel sees it; the installer continues after the reboot. Leave the stick in."
@@ -771,7 +792,7 @@ make_c5os() {
 		if ! c5os_kernel_ok; then
 			c5os_reboot
 		fi
-		rm -f "$OCDIR/c5os-rebooted"
+		rm -f "$STOCK_OCDIR/c5os-rebooted"
 		fs_blocks=$(dumpe2fs -h "$UD_DEV" 2>/dev/null | sed -n 's/^Block count: *//p')
 		fs_bs=$(dumpe2fs -h "$UD_DEV" 2>/dev/null | sed -n 's/^Block size: *//p')
 		if [ "${fs_blocks:-0}" -lt $(($(c5_part_bytes userdata) / ${fs_bs:-4096})) ] ||
@@ -896,12 +917,12 @@ flip() {
 to_openwrt() {
 	TVER=$(sed -n "s/^written slot=$TGT .* version=\([^ ]*\)$/\1/p" "$OCDIR/install.state" 2>/dev/null | head -n 1)
 	TVER=${TVER:-unknown}
+	copy_chainload
 	if kernel_good "$TK"; then
 		log "switch: slot $TGT kernel matches c5os good-kernel; no test boot"
 		flip
 	fi
 	pending_commit || fail "cannot write pending-commit on c5os"
-	copy_chainload
 	chainload_test
 }
 
@@ -922,6 +943,7 @@ do_install() {
 	if [ "$BACKUP" = 1 ]; then bk_nonui=ok; else bk_nonui=cancel; fi
 	if ui_confirm backup 0 "Back up the eMMC to this stick first?\n${BK_NEED_MIB} MB will be written to the stick and verified (about 20 minutes on the printer). The backup includes the full-size userdata and is what tools/make-restore-stick.sh restores from." \
 		"Back up" "Skip backup" "$bk_nonui"; then
+		close_c5os
 		backup_emmc
 	elif [ "$UI" = 1 ]; then
 		log "backup: skipped by the user"
@@ -929,7 +951,8 @@ do_install() {
 		log "backup: skipped (no --backup)"
 	fi
 	make_c5os
-	check_data_space
+	open_c5os
+	check_c5os_space
 
 	if [ "$YES" != 1 ] && [ "$HOOK" != 1 ] && [ "$UI" != 1 ]; then
 		[ -t 0 ] || abort "not interactive; re-run with --yes"
@@ -1024,8 +1047,8 @@ openwrt_main() {
 			ui_info repair-stock "Checking the saved stock slot..."
 			# shellcheck source-path=SCRIPTDIR source=restore.sh
 			. "$SELF_DIR/restore.sh"
-			# shellcheck disable=SC2153  # C5_UDATA comes from slot.sh
-			c5_with_part userdata "$C5_UDATA" ro,noload c5_restore_stock "$C5_UDATA/opencreator-os/stock" "$CHECK" ||
+			mountpoint -q "$C5_DATA" || finish failed "Stock repair FAILED\nc5os is not mounted at $C5_DATA." 1
+			c5_restore_stock "$OCDIR/stock" "$CHECK" ||
 				finish failed "Stock repair FAILED\n${C5_WHY:-Cannot restore stock.}" 1
 		fi
 		if why=$(c5_stock_blocker); then finish failed "Cannot select stock\n$why" 1; fi

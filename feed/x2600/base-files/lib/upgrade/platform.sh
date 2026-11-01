@@ -14,8 +14,8 @@
 #
 # Known-good kernels can boot directly with the counter protecting them.
 # Changed kernels keep the flag on stock until a healthy test boot commits
-# pending-commit on c5os. Their chainload kernel is staged on stock's
-# userdata so stock can test-boot the newly written slot.
+# pending-commit on c5os. Their chainload kernel is staged beside it on
+# c5os so stock can test-boot the newly written slot.
 #
 # Config: platform_copy_config stores $UPGRADE_BACKUP on c5os as
 # opencreator-os/sysupgrade.tgz; preinit 79_c5_import moves it to
@@ -99,44 +99,24 @@ c5_su_version() { # <tar>
 	echo "${ver:-unknown}"
 }
 
-# Runs with userdata mounted at $C5_UDATA (c5_with_part): forget the saved
-# chainload kernel of any earlier upgrade.
-c5_drop_kernel() {
-	local d="$C5_UDATA/opencreator-os/chainload"
-	rm -f "$d/kernel.uimage" "$d/kernel.uimage.new"
-	[ ! -e "$d/kernel.uimage" ]
-}
-
-# Runs with c5os mounted at /tmp/c5-c5os: forget the pending-commit of any
-# earlier upgrade.
-c5_drop_commit() {
-	local d=/tmp/c5-c5os/opencreator-os
-	rm -f "$d/pending-commit" "$d/pending-commit.new"
-	[ ! -e "$d/pending-commit" ]
-}
-
-# Both of the above; C5_SU_PART names the partition(s) that failed.
+# Runs with c5os mounted at /tmp/c5-c5os: forget the saved kernel and
+# pending-commit of any earlier upgrade, including incomplete writes.
 c5_drop_pending() {
-	C5_SU_PART=
-	c5_with_part userdata "$C5_UDATA" rw,noatime c5_drop_kernel || C5_SU_PART=userdata
-	c5_with_part c5os /tmp/c5-c5os rw,noatime c5_drop_commit || C5_SU_PART="${C5_SU_PART:+$C5_SU_PART and }c5os"
-	[ -z "$C5_SU_PART" ]
-}
-
-# Runs with userdata mounted at $C5_UDATA. Uses the C5_SU_* variables set by
-# platform_do_upgrade.
-c5_store_kernel() {
-	local d="$C5_UDATA/opencreator-os/chainload"
-	mkdir -p "$d" &&
-		c5_su_member "$C5_SU_TAR" "$C5_SU_DIR" kernel > "$d/kernel.uimage.new" &&
-		[ "$(sha256sum < "$d/kernel.uimage.new" | cut -d' ' -f1)" = "$C5_SU_KSUM" ] &&
-		mv -f "$d/kernel.uimage.new" "$d/kernel.uimage"
-}
-
-# Runs with c5os mounted at /tmp/c5-c5os.
-c5_store_commit() {
 	local d=/tmp/c5-c5os/opencreator-os
-	mkdir -p "$d" &&
+	rm -f "$d/chainload/kernel.uimage" "$d/chainload/kernel.uimage.new" \
+		"$d/pending-commit" "$d/pending-commit.new" &&
+		[ ! -e "$d/chainload/kernel.uimage" ] && [ ! -e "$d/pending-commit" ]
+}
+
+# Runs with c5os mounted at /tmp/c5-c5os. Stage the kernel before publishing
+# pending-commit; on any failure remove both while the partition is mounted.
+# Uses the C5_SU_* variables set by platform_do_upgrade.
+c5_store_pending() {
+	local d=/tmp/c5-c5os/opencreator-os
+	mkdir -p "$d/chainload" &&
+		c5_su_member "$C5_SU_TAR" "$C5_SU_DIR" kernel > "$d/chainload/kernel.uimage.new" &&
+		[ "$(sha256sum < "$d/chainload/kernel.uimage.new" | cut -d' ' -f1)" = "$C5_SU_KSUM" ] &&
+		mv -f "$d/chainload/kernel.uimage.new" "$d/chainload/kernel.uimage" &&
 		{
 			echo "slot=$C5_SU_SLOT"
 			echo "rootdev=$C5_SU_RDEV"
@@ -146,22 +126,10 @@ c5_store_commit() {
 			echo "kernel_sha256=$C5_SU_KSUM"
 			echo "rootfs_sha256=$C5_SU_RSUM"
 		} > "$d/pending-commit.new" &&
-		mv -f "$d/pending-commit.new" "$d/pending-commit" || return 1
-	# sysupgrade -n: drop a stale saved config so it is not restored later.
-	[ -n "$UPGRADE_BACKUP" ] || rm -f "$d/sysupgrade.tgz"
-	return 0
-}
-
-# Kernel to userdata, then pending-commit to c5os. On any failure nothing
-# usable is left behind and C5_SU_PART names the partition that failed.
-c5_store_pending() {
-	local failed=userdata
-	if c5_with_part userdata "$C5_UDATA" rw,noatime c5_store_kernel; then
-		failed=c5os
-		c5_with_part c5os /tmp/c5-c5os rw,noatime c5_store_commit && return 0
-	fi
+		mv -f "$d/pending-commit.new" "$d/pending-commit" &&
+		# sysupgrade -n: drop a stale saved config so it is not restored later.
+		{ [ -n "$UPGRADE_BACKUP" ] || rm -f "$d/sysupgrade.tgz"; } && return 0
 	c5_drop_pending
-	C5_SU_PART=$failed
 	return 1
 }
 
@@ -184,14 +152,12 @@ platform_do_upgrade() {
 		return 1
 	fi
 
+	c5_with_part c5os /tmp/c5-c5os rw,noatime c5_drop_pending ||
+		{ v "cannot remove the saved chainload kernel / pending-commit on c5os; not writing"; return 1; }
 	if [ "$known" = 1 ]; then
-		c5_with_part c5os /tmp/c5-c5os rw,noatime c5_drop_commit ||
-			{ v "cannot remove pending-commit on c5os; not writing"; return 1; }
 		v "Known-good kernel; keeping the boot flag on OpenWrt (slot $own)"
 		c5_flag_write "$own" || { v "boot flag write failed; not writing"; return 1; }
 	else
-		c5_drop_pending ||
-			{ v "cannot remove the saved chainload kernel (userdata) / pending-commit (c5os): $C5_SU_PART failed; not writing"; return 1; }
 		v "Pointing the boot flag at stock (slot $other); it stays there after the write"
 		c5_flag_write "$other" || { v "boot flag write failed; not writing"; return 1; }
 	fi
@@ -224,10 +190,10 @@ platform_do_upgrade() {
 	C5_SU_TAR=$tar C5_SU_DIR=$dir C5_SU_SLOT=$own C5_SU_RDEV=$rdev C5_SU_KSUM=$ksum C5_SU_RSUM=$rsum
 	C5_SU_VERSION=$(c5_su_version "$tar")
 	C5_SU_PREVIOUS=$(sed -n "s/^DISTRIB_RELEASE='\{0,1\}\([^']*\)'\{0,1\}$/\1/p" /etc/openwrt_release 2>/dev/null)
-	if c5_store_pending; then
-		v "Recorded opencreator-os/pending-commit on c5os and chainload/kernel.uimage on userdata"
+	if c5_with_part c5os /tmp/c5-c5os rw,noatime c5_store_pending; then
+		v "Recorded opencreator-os/pending-commit and opencreator-os/chainload/kernel.uimage on c5os"
 	else
-		v "ERROR: slot $own is written, but chainload/kernel.uimage (userdata) and pending-commit (c5os) could not be stored: $C5_SU_PART failed."
+		v "ERROR: slot $own is written, but chainload/kernel.uimage and pending-commit could not be stored on c5os."
 		v "The next boot is stock (slot $other). The new image cannot be test-booted with the saved kernel;"
 		v "reinstall it from stock with an install stick."
 		c5_bootlog "sysupgrade: slot $own written, but storing the chainload kernel / pending-commit FAILED"
@@ -236,8 +202,10 @@ platform_do_upgrade() {
 
 	v "Slot $own written and verified (version $C5_SU_VERSION). NEXT BOOT IS STOCK (slot $other)."
 	v "Test-boot the new image from stock before it becomes the default:"
-	v "  over SSH on stock: sh /usr/data/opencreator-os/chainload/c5-chainload.sh stage $rdev"
-	v "                     sh /usr/data/opencreator-os/chainload/c5-chainload.sh go"
+	v "  over SSH on stock: mkdir -p /tmp/c5os-config"
+	v "                     mount -t ext4 -o ro,noload $(c5_part_dev c5os) /tmp/c5os-config"
+	v "                     sh /tmp/c5os-config/opencreator-os/chainload/c5-chainload.sh stage $rdev"
+	v "                     sh /tmp/c5os-config/opencreator-os/chainload/c5-chainload.sh go"
 	v "  or Swap to OpenWrt from an install stick on stock"
 	v "The first healthy boot of slot $own commits it (c5-booted points the flag at it)."
 	return 0
