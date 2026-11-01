@@ -22,6 +22,7 @@ if [ "$FORCE" = 0 ] && [ -s "$VMLINUX" ] && [ -s "$VMLINUX.modules/cdc_ether.ko"
 fi
 
 CC_PREFIX=$(pick_cross_compile) || { echo "kernel: no MIPS cross compiler found (set CROSS_COMPILE)" >&2; exit 1; }
+set_openwrt_staging_dir "$CC_PREFIX"
 SRC=$QWORK/linux-$KVER
 OBJ=$QWORK/kbuild-$KVER
 TARBALL=$QWORK/dl/linux-$KVER.tar.xz

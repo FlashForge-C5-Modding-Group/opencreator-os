@@ -10,6 +10,7 @@
 #   QEMU_CPU       QEMU CPU model (must run stock NaN2008 glibc and OpenWrt musl)
 #   QEMU_AIO       QEMU drive aio= backend (io_uring; threads if QEMU lacks it)
 #   CROSS_COMPILE  toolchain prefix for the QEMU kernel
+#   STAGING_DIR    target staging directory for an OpenWrt compiler (auto if empty)
 
 QREPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 QDIR=$QREPO/test/qemu
@@ -74,4 +75,42 @@ pick_cross_compile() {
 		[ -x "$c" ] && { echo "${c%gcc}"; return; }
 	done
 	return 1
+}
+
+# OpenWrt GCC's specs use STAGING_DIR for target headers and libraries; the
+# toolchain's own sysroot is not that directory. Follow the selected compiler,
+# which may belong to a different checkout than OWRT_DIR.
+set_openwrt_staging_dir() {
+	[ -z "${STAGING_DIR:-}" ] || return 0
+	local compiler toolchain staging arch libc target
+	compiler=$(command -v "${1}gcc") || {
+		echo "kernel: compiler not found: ${1}gcc" >&2
+		return 1
+	}
+	case "${compiler##*/}" in
+	*-openwrt-*-gcc) ;;
+	*) return 0 ;;
+	esac
+	compiler=$(readlink -f "$compiler") || return 1
+	toolchain=${compiler%/bin/*}
+	staging=${toolchain%/*}
+	toolchain=${toolchain##*/}
+	case "$toolchain" in
+	toolchain-*_gcc-*_*)
+		arch=${toolchain#toolchain-}
+		arch=${arch%%_gcc-*}
+		libc=${toolchain#*_gcc-}
+		libc=${libc#*_}
+		target=$staging/target-${arch}_${libc}
+		;;
+	*)
+		echo "kernel: cannot derive target STAGING_DIR from $compiler; set STAGING_DIR explicitly" >&2
+		return 1
+		;;
+	esac
+	[ -d "$target" ] || {
+		echo "kernel: target STAGING_DIR not found: $target; set STAGING_DIR explicitly" >&2
+		return 1
+	}
+	export STAGING_DIR=$target
 }
