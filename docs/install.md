@@ -18,8 +18,7 @@ Everything runs from a FAT32 USB stick, inserted with the printer off.
    **Skip backup**.
 5. First install only: tap **Create partition** (it unlocks after 5 s). This
    shrinks `userdata` to 2 GB and adds a 4 GB `c5os` partition for OpenWrt's
-   data. Don't power off. If the printer reboots, leave the stick in; the
-   install continues.
+   data. Don't power off or remove the stick; the printer may reboot once.
 6. Wait while the installer saves a copy of stock, writes OpenWrt and
    test-boots it. The boot log scrolls on the screen.
 7. When **OpenWrt installed** appears, remove the stick and tap **Reboot**.

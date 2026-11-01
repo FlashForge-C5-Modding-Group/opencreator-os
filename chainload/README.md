@@ -154,6 +154,10 @@ sh "$CL" unstage                 # cancel, or:
 sh "$CL" go                      # SSH drops
 ```
 
+`stage` needs the saved `kernel.uimage` in that directory. A sysupgrade that
+keeps a known-good kernel deletes it, so after such an update use the install
+stick's **Swap to OpenWrt**, which copies the slot's kernel again.
+
 After cancellation or inspection, unmount it with
 `umount /tmp/c5os-config`. For a jump, staging consumes the saved image and
 module before `go` remounts `c5os` read-only. It stays mounted so the
