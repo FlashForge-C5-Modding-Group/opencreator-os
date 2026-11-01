@@ -13,6 +13,7 @@
 #   C5_FDISK       fdisk binary, run as "$C5_FDISK -l $C5_DISK" (fdisk)
 #   C5_SFDISK      util-linux sfdisk for GPT dump/write       (sfdisk; install.sh: the stick's bin/sfdisk)
 #   C5_DATA        stock userdata mount point                 (/usr/data)
+#   C5_NETWORK     stock network.json (default $C5_DATA/firmwareRes/config/network.json)
 #   C5_REBOOT      reboot command (stock adds -f)              (reboot)
 #   C5_UNAME_R     kernel release                             ($(uname -r))
 #   C5_SUM         force md5sum or sha256sum                  (sha256sum if present)
@@ -337,15 +338,34 @@ wpa_value() {
 	*) printf '%s' "$1" ;;
 	esac
 }
+# Stock writes a flat JsonCpp object (with a leading comment). Only these
+# simple boolean/IPv4 string fields are needed; no JSON tool exists on stock.
+wifi_static_conf() {
+	[ -r "$1" ] || return 0
+	awk -F '"' 'BEGIN { RS = "[,\n]" }
+		$2 == "staticIpOpen" { enabled = ($3 ~ /^[ \t\r]*:[ \t\r]*true[ \t\r}]*$/) }
+		$2 == "st_ipaddress" { ip = $4 }
+		$2 == "st_netmask" { mask = $4 }
+		$2 == "st_gateway" { gateway = $4 }
+		$2 == "st_dns" { dns = $4 }
+		END { if (enabled) {
+			print "IPADDR\t" ip; print "NETMASK\t" mask
+			print "GATEWAY\t" gateway; print "DNS\t" dns
+		} }' "$1" |
+		while IFS="$(printf '\t')" read -r wc_key wc_value; do
+			printf '%s=%s\n' "$wc_key" "$(shq "$wc_value")"
+		done
+}
+
 
 # First line of a wifi.conf written by wifi_conf; a wifi.conf without it was
 # written by hand and is left alone by callers that check.
 WIFI_CONF_AUTO="# from stock wpa_supplicant.conf (wifi_conf)"
 
-# wifi_conf WPA_CONF OUT: write OUT as shell-sourceable SSID='...' PSK='...'
-# (mode 600; what OpenWrt's c5-wifi-sta reads) from the network wpa_pick
-# chooses. Prints the SSID. Returns 1 when no enabled block has an ssid=,
-# 2 when OUT cannot be written.
+# wifi_conf WPA_CONF OUT: write shell-sourceable credentials and, when stock
+# enabled static IPv4, IPADDR/NETMASK/GATEWAY/DNS from network.json (mode 600).
+# Prints the chosen SSID. Returns 1 when no enabled block has an ssid=,
+# 2 when OUT cannot be written. Hand-written wifi.conf uses the same keys.
 wifi_conf() {
 	wc_line=$(wpa_pick "$1") || return 1
 	wc_ssid=$(ssid_value "$(printf '%s' "$wc_line" | cut -f4)")
@@ -353,7 +373,12 @@ wifi_conf() {
 	wc_psk=$(wpa_value "$(printf '%s' "$wc_line" | cut -f5-)")
 	(
 		umask 077
-		{ echo "$WIFI_CONF_AUTO"; echo "SSID=$(shq "$wc_ssid")"; echo "PSK=$(shq "$wc_psk")"; } > "$2.new" &&
+		{
+			echo "$WIFI_CONF_AUTO"
+			echo "SSID=$(shq "$wc_ssid")"
+			echo "PSK=$(shq "$wc_psk")"
+			wifi_static_conf "${C5_NETWORK:-$C5_DATA/firmwareRes/config/network.json}"
+		} > "$2.new" &&
 			chmod 600 "$2.new" 2>/dev/null; mv -f "$2.new" "$2"
 	) || return 2
 	printf '%s\n' "$wc_ssid"

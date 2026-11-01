@@ -125,6 +125,23 @@ forwarding and sets a 3-second panic timeout. This release's netifd does not
 write forwarding sysctls during interface setup. S2 checks forwarding stays
 zero after boot and a lan `ifup`.
 
+`/etc/hotplug.d/iface/30-c5-ip` writes `c5: lan <IPv4>` or
+`c5: wwan <IPv4> (<SSID>)` to writable `/dev/tty0` on `ifup` and
+address-changing `ifupdate` events. It reads the address through OpenWrt's
+`network_get_ipaddr` and the Wi-Fi SSID from `wireless.c5sta.ssid`; other
+interfaces, address-less events and missing VTs produce no notice. There
+is no daemon, display clearing or framebuffer access. S2 checks the real
+LAN DHCP event through `/dev/vcs1` when available, plus SSID formatting
+with a temporary logical `wwan` on loopback, not a Wi-Fi association.
+
+**Reimplementation, source reasoning:** `installer/runFirmwareExe.sh`
+unbinds fbcon before the installer app owns `/dev/fb0` and rebinds it when
+the app exits. The hotplug writes only VT text; it neither rebinds fbcon
+nor draws over the app, so it does not conflict with that ownership.
+Notices need not be visible while fbcon is unbound. Physical-printer
+visibility, including after rebind, remains unverified; QEMU has no
+framebuffer and checks VT text only.
+
 `/etc/config/fstab` mounts ext4 label `c5os` at `/data` (`rw,noatime`), with
 no `userdata` fallback, and enables `/data/swapfile` (`config swap`).
 `c5-booted` creates the 256 MiB swap file once, after the first healthy
@@ -137,3 +154,13 @@ Preinit (`79_c5_import`) copies `model`, `wifi.conf` and `authorized_keys`
 from `c5os`'s `opencreator-os/` into `/etc/c5/` and `/etc/dropbear/` when the
 destination is empty, and stages a saved `sysupgrade.tgz`.
 `/lib/upgrade/keep.d/c5` keeps `/etc/c5/` across sysupgrade.
+
+Stock Wi-Fi import also reads
+`/usr/data/firmwareRes/config/network.json`: when `staticIpOpen` is `true`,
+it exports `IPADDR`, `NETMASK`, `GATEWAY` and `DNS` into `wifi.conf`.
+`c5-wifi-sta` configures static IPv4 when `IPADDR` is nonempty; DHCP remains
+the default. A hand-written, shell-sourceable stick
+`opencreator-os/wifi.conf` takes precedence over stock import and accepts
+the same optional keys alongside `SSID` and `PSK`; `DNS` may contain
+space-separated server addresses. Existing configured Wi-Fi is not
+overwritten.

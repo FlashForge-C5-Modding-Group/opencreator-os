@@ -3,10 +3,10 @@
 #
 # c5-wifi-sta [--wait SECONDS]
 #
-# Create the Wi-Fi client interface wireless.c5sta (network "wwan", DHCP) from
-# /etc/c5/wifi.conf (shell-sourceable SSID='...' PSK='...', imported by
-# preinit from c5os). Idempotent: does
-# nothing once wireless.c5sta exists.
+# Create the Wi-Fi client interface wireless.c5sta (network "wwan") from
+# /etc/c5/wifi.conf (shell-sourceable SSID/PSK, imported from c5os).
+# Optional IPADDR/NETMASK/GATEWAY/DNS select static IPv4; otherwise use DHCP.
+# Idempotent: does nothing once wireless.c5sta exists.
 #
 # The radio's wifi-device section is created by 'wifi config', which is
 # skipped while /etc/init.d/boot still has /tmp/.config_pending. With --wait
@@ -41,7 +41,7 @@ trap 'lock -u /var/lock/c5-wifi-sta' EXIT
 
 uci -q get wireless.c5sta >/dev/null && exit 0
 
-SSID='' PSK=''
+SSID='' PSK='' IPADDR='' NETMASK='' GATEWAY='' DNS=''
 . "$CONF"
 [ -n "$SSID" ] || { logger -t c5-wifi-sta "no SSID in $CONF"; exit 0; }
 
@@ -50,11 +50,19 @@ for s in $(uci -q show wireless | sed -n "s/^wireless\.\([^.=]*\)=wifi-iface$/\1
 	[ "$(uci -q get "wireless.$s.device")" = "$radio" ] && uci -q set "wireless.$s.disabled=1"
 done
 
-uci -q get network.wwan >/dev/null || uci -q batch <<EOF
-set network.wwan=interface
-set network.wwan.proto='dhcp'
-commit network
-EOF
+if ! uci -q get network.wwan >/dev/null; then
+	uci -q set network.wwan=interface
+	if [ -n "$IPADDR" ]; then
+		uci -q set network.wwan.proto=static
+		uci -q set "network.wwan.ipaddr=$IPADDR"
+		[ -z "$NETMASK" ] || uci -q set "network.wwan.netmask=$NETMASK"
+		[ -z "$GATEWAY" ] || uci -q set "network.wwan.gateway=$GATEWAY"
+		for dns in $DNS; do uci -q add_list "network.wwan.dns=$dns"; done
+	else
+		uci -q set network.wwan.proto=dhcp
+	fi
+	uci -q commit network
+fi
 
 uci -q batch <<EOF
 set wireless.$radio.disabled='0'

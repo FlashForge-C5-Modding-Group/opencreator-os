@@ -129,6 +129,22 @@ build_stock_fixture() {
 	rm -f "$BASE_DISK"
 }
 
+# Synthetic saved preferences, shared by stock-layout and repartitioned disks.
+stock_network_fixture() {
+	mkdir -p "$1/firmwareRes/config"
+	cat > "$1/firmwareRes/config/network.json" <<'EOF'
+/* Printer Network Config */
+{
+	"staticIpOpen" : true,
+	"st_ipaddress" : "192.168.2.78",
+	"st_netmask" : "255.255.255.0",
+	"st_gateway" : "192.168.2.1",
+	"st_dns" : "192.168.2.1",
+	"wifiOpen" : true
+}
+EOF
+}
+
 # make_emmc_image IMG SECTORS QUIRK_LAST P7_LAST: eMMC image with the
 # printer's GPT; stock in both slots (as after a stock OTA), flag on slot 2,
 # usershare with a Wi-Fi config, empty userdata ending at P7_LAST. The
@@ -193,7 +209,10 @@ network={
 EOF
 	MKE2FS_CONFIG=$FIX/stock-stage/etc/mke2fs.conf mkfs.ext4 -q -F -L usershare -d "$st" \
 		-E offset="$(poff 6)" "$d" $((PSIZE[6] / 2))k || return 1
-	MKE2FS_CONFIG=$FIX/stock-stage/etc/mke2fs.conf mkfs.ext4 -q -F -L userdata \
+	st=$FIX/userdata-stage
+	mkdir -p "$st"
+	stock_network_fixture "$st"
+	MKE2FS_CONFIG=$FIX/stock-stage/etc/mke2fs.conf mkfs.ext4 -q -F -L userdata -d "$st" \
 		-E offset="$(poff 7)" "$d" $(((p7last + 1 - PSTART[7]) / 2))k
 }
 
@@ -201,7 +220,7 @@ EOF
 # when the image recipe changes.
 build_base_disk() {
 	local key
-	key=$({ cat "$STOCK_SQFS.key"; declare -f make_emmc_image host_c5os_script build_c5os_disk; echo "$DISK_SECTORS $GPT_QUIRK_LAST ${PSTART[*]} ${PSIZE[*]}"; } | sha256sum | cut -c1-16)
+	key=$({ cat "$STOCK_SQFS.key"; declare -f make_emmc_image stock_network_fixture host_c5os_script build_c5os_disk; echo "$DISK_SECTORS $GPT_QUIRK_LAST ${PSTART[*]} ${PSIZE[*]}"; } | sha256sum | cut -c1-16)
 	if [ -s "$BASE_DISK" ] && [ "$(cat "$BASE_DISK.key" 2>/dev/null)" = "$key" ]; then
 		build_c5os_disk
 		return
@@ -245,7 +264,8 @@ build_c5os_disk() {
 	cp --sparse=always "$BASE_DISK" "$d"
 	host_c5os_script "$d" "${PSTART[8]}" "${PSIZE[8]}" > "$FIX/c5os.sfdisk"
 	sfdisk -q --force "$d" < "$FIX/c5os.sfdisk" >/dev/null 2>&1 || { echo "fixture: sfdisk failed" >&2; return 1; }
-	MKE2FS_CONFIG=$FIX/stock-stage/etc/mke2fs.conf mkfs.ext4 -q -F -L userdata \
+	stock_network_fixture "$FIX/userdata-stage"
+	MKE2FS_CONFIG=$FIX/stock-stage/etc/mke2fs.conf mkfs.ext4 -q -F -L userdata -d "$FIX/userdata-stage" \
 		-E offset="$(poff 7)" "$d" $((PSIZE[7] / 2))k || return 1
 	MKE2FS_CONFIG=$FIX/stock-stage/etc/mke2fs.conf mkfs.ext4 -q -F -L c5os \
 		-E offset="$(poff 8)" "$d" $((PSIZE[8] / 2))k || return 1

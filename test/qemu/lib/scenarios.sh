@@ -152,7 +152,11 @@ scenario_S1() {
 	check "stock MANIFEST.txt records slot 2" bash -c "debugfs -R 'cat $ow/stock/MANIFEST.txt' '$(userdata_spec "$DISK")' 2>/dev/null | grep -qx 'slot: 2'"
 	check "wifi.conf saved on c5os from usershare" is_eq "$(c5os_cat "$DISK" $ow/wifi.conf)" "# from stock wpa_supplicant.conf (wifi_conf)
 SSID='QEMU Test Net'
-PSK='qemu-psk-'\\''quoted'\\''-123'"
+PSK='qemu-psk-'\\''quoted'\\''-123'
+IPADDR='192.168.2.78'
+NETMASK='255.255.255.0'
+GATEWAY='192.168.2.1'
+DNS='192.168.2.1'"
 	check "install.state = written slot=1" bash -c "debugfs -R 'cat $ow/install.state' '$(userdata_spec "$DISK")' 2>/dev/null | grep -q '^written slot=1 kernel=/dev/mmcblk0p1 rootfs=/dev/mmcblk0p2 '"
 	check "chainload files copied to userdata" bash -c "for f in chainload.ko c5-chainload.sh kernel.uimage; do debugfs -R \"stat $ow/chainload/\$f\" '$(userdata_spec "$DISK")' 2>/dev/null | grep -q '^Inode:' || exit 1; done"
 	check "chainload kernel = slot 1's uImage" is_eq "$(data_cat "$DISK" $ow/chainload/kernel.uimage | sha256sum | cut -d' ' -f1)" "$OW_K_SUM"
@@ -186,6 +190,10 @@ scenario_S2() {
 	local st=$RUN/s2-openwrt.steps
 	steps_openwrt "$st" <<'EOF'
 run 30 wificonf cat /etc/c5/wifi.conf
+# No radio is emulated: provide a device section and exercise the real UCI
+# writer, then remove the synthetic Wi-Fi configuration before normal probes.
+run 30 wifistatic uci set wireless.qemutest=wifi-device; uci set wireless.qemutest.type=mac80211; /usr/libexec/c5-wifi-sta; uci show network.wwan; uci -q delete wireless.c5sta; uci -q delete wireless.qemutest; uci commit wireless; uci -q delete network.wwan; uci commit network
+run 30 wifidhcp cp /etc/c5/wifi.conf /tmp/wifi.saved; printf "SSID='Hand written'\nPSK=''\n" > /etc/c5/wifi.conf; uci set wireless.qemutest=wifi-device; uci set wireless.qemutest.type=mac80211; /usr/libexec/c5-wifi-sta; uci show network.wwan; uci -q delete wireless.c5sta; uci -q delete wireless.qemutest; uci commit wireless; uci -q delete network.wwan; uci commit network; mv /tmp/wifi.saved /etc/c5/wifi.conf
 run 30 fstab uci -q get fstab.data.label; uci -q get fstab.data.target
 run 30 hostname uci -q get system.@system[0].hostname
 run 30 logs ls /data/opencreator-os/logs/
@@ -197,6 +205,13 @@ run 300 swap i=0; until grep -q '^/data/swapfile[[:space:]]' /proc/swaps; do i=$
 # does on the printer after ntpd started, and expect the jailed ntpd to see it
 run 150 ntpdns uci set network.lan.dns=10.0.2.3 && uci commit network && ifup lan; i=0; until p=; for p in $(pidof ntpd); do [ "$(readlink /proc/$p/ns/mnt)" != "$(readlink /proc/self/ns/mnt)" ] && grep -q '^nameserver 10\.0\.2\.3' /proc/$p/root/etc/resolv.conf 2>/dev/null && break; p=; done; [ -n "$p" ]; do i=$((i+1)); [ $i -lt 120 ] || exit 1; sleep 1; done; grep nameserver /proc/$p/root/etc/resolv.conf; uci delete network.lan.dns; uci commit network
 run 30 forwarding v4=$(cat /proc/sys/net/ipv4/ip_forward); v6=$(cat /proc/sys/net/ipv6/conf/all/forwarding); printf 'IPv4 forwarding=%s IPv6 forwarding=%s\n' "$v4" "$v6"; [ "$v4:$v6" = 0:0 ]
+# QEMU has a VT but no framebuffer: inspect its text cells, not serial.
+# Clear old boot text so only the real lan DHCP event can satisfy this.
+run 150 panelip ( [ -r /dev/vcs1 ] || exit 77; ifdown lan || exit 1; printf '\033[2J\033[H' > /dev/tty0; ifup lan; i=0; until grep -qF 'c5: lan 10.0.2.15' /dev/vcs1; do i=$((i+1)); [ $i -lt 120 ] || exit 1; sleep 1; done; cat /dev/vcs1 )
+# No radio is emulated. A temporary logical wwan on lo exercises the real
+# address lookup and UCI SSID formatting, not Wi-Fi association.
+run 60 panelwifi ( [ -r /dev/vcs1 ] || exit 77; uci set wireless.c5sta=wifi-iface && uci set 'wireless.c5sta.ssid=QEMU Test Net' || exit 1; printf '\033[2J\033[H' > /dev/tty0; ubus call network add_dynamic '{"name":"wwan","proto":"static","device":"lo","ipaddr":["192.0.2.2"],"netmask":"255.255.255.0"}' || exit 1; i=0; until grep -qF 'c5: wwan 192.0.2.2 (QEMU Test Net)' /dev/vcs1; do i=$((i+1)); [ $i -lt 30 ] || exit 1; sleep 1; done; cat /dev/vcs1 )
+run 30 panelupdate ( [ -r /dev/vcs1 ] || exit 77; printf '\033[2J\033[H' > /dev/tty0; ACTION=ifdown INTERFACE=lan sh /etc/hotplug.d/iface/30-c5-ip; ACTION=ifup INTERFACE=loopback sh /etc/hotplug.d/iface/30-c5-ip; ACTION=ifupdate IFUPDATE_ADDRESSES=0 INTERFACE=wwan sh /etc/hotplug.d/iface/30-c5-ip; if grep -qF 'c5:' /dev/vcs1; then exit 1; fi; ACTION=ifupdate IFUPDATE_ADDRESSES=1 INTERFACE=wwan sh /etc/hotplug.d/iface/30-c5-ip || exit 1; grep -qF 'c5: wwan 192.0.2.2 (QEMU Test Net)' /dev/vcs1 || exit 1; cat /dev/vcs1; ubus call network.interface.wwan down; uci revert wireless.c5sta )
 EOF
 	boot s2-openwrt "$DISK" "$(chainload_cmdline s2-stock)" "$st" "$RUN/stick-s2-stock.img"
 	check "OpenWrt shell reached and c5-booted ran" res_has s2-openwrt waitboot 'c5: booted:'
@@ -219,11 +234,21 @@ EOF
 	check "/data = c5os (mmcblk0p8)" res_has s2-openwrt mounts '^/dev/mmcblk0p8 /data ext4'
 	check "fixed fstab selects c5os label at /data" bash -c "[ \"\$(printf '%s\n' \"\$1\" | tr -d '\r' | tr '\n' ' ')\" = 'c5os /data ' ]" _ "$(res_out "$RUN/s2-openwrt.res" fstab)"
 	check "wifi.conf imported to /etc/c5/wifi.conf" res_has s2-openwrt wificonf "^SSID='QEMU Test Net'"
+	check "stock static IPv4 imported through wifi.conf" res_has s2-openwrt wificonf "^IPADDR='192\.168\.2\.78'"
+	check "Wi-Fi UCI uses stock static IPv4, netmask, gateway and DNS" bash -c 'for kv in "proto=static" "ipaddr=192.168.2.78" "netmask=255.255.255.0" "gateway=192.168.2.1" "dns=192.168.2.1"; do printf "%s\n" "$1" | tr -d "'\''\r" | grep -qx "network.wwan.$kv" || exit 1; done' _ "$(res_out "$RUN/s2-openwrt.res" wifistatic)"
+	check "hand-written SSID-only wifi.conf still selects DHCP" res_has s2-openwrt wifidhcp "^network\.wwan\.proto='dhcp'"
 	check "dropbear running" res_ok s2-openwrt dropbear
 	check "hard-float userland works (awk 1.5*2 = 3)" res_has s2-openwrt float '^3$'
 	check "overlay (rootfs_data) is ext4 after the squashfs on p2" overlay_is_ext4 "$DISK" 2
 	check "ntpd's jail sees the DNS server lan got after ntpd started (sysntpd restarted)" res_has s2-openwrt ntpdns '^nameserver 10\.0\.2\.3'
 	check "IPv4 and IPv6 forwarding remain off after boot and lan ifup" res_ok s2-openwrt forwarding
+	if [ "$(res_rc "$RUN/s2-openwrt.res" panelip)" = 77 ]; then
+		echo "  SKIP panel IP notice: QEMU has no readable /dev/vcs1"
+	else
+		check "real lan DHCP hotplug writes its IPv4 address to the VT" res_ok s2-openwrt panelip
+		check "logical wwan hotplug writes IPv4 and the UCI SSID (no radio)" res_ok s2-openwrt panelwifi
+		check "only relevant interfaces and address updates write a VT notice" res_ok s2-openwrt panelupdate
+	fi
 	check "wifi.conf persisted in the overlay upper dir" bash -c "debugfs -R 'cat /upper/etc/c5/wifi.conf' '$(overlay_spec "$DISK" 2)' 2>/dev/null | grep -q '^SSID='"
 	check "logs written to c5os opencreator-os/logs" bash -c "for f in dmesg-last.txt logread-last.txt bootlog-last.txt; do debugfs -R \"stat /opencreator-os/logs/\$f\" '$(c5os_spec "$DISK")' 2>/dev/null | grep -q '^Inode:' || exit 1; done"
 	check "c5-swap created /data/swapfile (mode 600) and swap is on" bash -c "printf '%s\n' \"\$1\" | grep -qE '^/data/swapfile[[:space:]]+file[[:space:]]+[1-9]' && printf '%s\n' \"\$1\" | grep -qE '^-rw------- '" _ "$(res_out "$RUN/s2-openwrt.res" swap)"

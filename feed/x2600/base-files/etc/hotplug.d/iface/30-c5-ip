@@ -1,0 +1,22 @@
+# shellcheck shell=sh
+# Sourced by hotplug-call in a subshell; no daemon or framebuffer ownership.
+
+case "$ACTION" in
+	ifup) ;;
+	ifupdate) [ "$IFUPDATE_ADDRESSES" = 1 ] || exit 0 ;;
+	*) exit 0 ;;
+esac
+case "$INTERFACE" in
+	wwan|lan) ;;
+	*) exit 0 ;;
+esac
+[ -c /dev/tty0 ] && [ -w /dev/tty0 ] || exit 0
+
+. /lib/functions/network.sh
+network_get_ipaddr ip "$INTERFACE" && [ -n "$ip" ] || exit 0
+if [ "$INTERFACE" = wwan ]; then
+	ssid=$(uci -q get wireless.c5sta.ssid)
+	printf 'c5: wwan %s (%s)\n' "$ip" "$ssid" > /dev/tty0
+else
+	printf 'c5: lan %s\n' "$ip" > /dev/tty0
+fi
