@@ -74,6 +74,13 @@ export OUT=~/opencreator-os-builds
 The first build takes hours. Output: `$OUT/<version>/`, where `<version>` is
 `git describe --always --dirty --tags`.
 
+Incremental builds reuse the resolved OpenWrt configuration when the generated
+seed (including version and kernel path), OpenWrt release, feeds and target
+contents are unchanged. Missing or edited `.config` files are regenerated.
+`--menuconfig` and `--kernel-menuconfig` still start from the seed; save
+permanent changes in `config/openwrt.seed` or `feed/x2600/config-6.6`.
+Sources download as needed during `world`, without a separate download pass.
+
 ## 5. Build the touchscreen app
 
 The app uses the toolchain installed by step 3. If you exported a custom

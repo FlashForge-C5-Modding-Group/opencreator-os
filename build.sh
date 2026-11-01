@@ -98,16 +98,55 @@ log "config ($VERSION)"
 	cat "$REPO/config/openwrt.seed"
 	echo "CONFIG_EXTERNAL_KERNEL_TREE=\"$KSRC\""
 	echo "CONFIG_VERSION_NUMBER=\"$VERSION\""
-} > "$OW/.config"
-(cd "$OW" && make defconfig >/dev/null)
+} > "$OW/.c5-config.seed"
+# Hash inputs, not mtimes: the target is copied afresh on every invocation.
+# Feed revisions/diffs and generated indexes avoid scanning entire feed trees.
+CONFIG_KEY=$(
+	set -e
+	cd "$OW"
+	{
+		printf '%s\n' "$OPENWRT_TAG"
+		sha256sum .c5-config.seed .c5-feeds-tag
+		for f in feeds.conf feeds.conf.default feeds/*.index feeds/*.targetindex; do
+			[ ! -f "$f" ] || sha256sum "$f"
+		done
+		for f in feeds/*; do
+			[ -e "$f/.git" ] || continue
+			printf '%s\n' "$f"
+			git -C "$f" rev-parse HEAD
+			git -C "$f" diff --binary HEAD --
+			(cd "$f" && git ls-files --others --exclude-standard -z |
+				xargs -0 -r sha256sum)
+		done
+		if [ -d package/feeds ]; then
+			find package/feeds -type l -printf '%p %l\0' | LC_ALL=C sort -z
+		fi
+		tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
+			-cf - target/linux/x2600
+	} | sha256sum | cut -d' ' -f1
+)
+CONFIG_HASH=
+[ ! -f "$OW/.config" ] || CONFIG_HASH=$(sha256sum < "$OW/.config")
+CONFIG_STAMP=$OW/.c5-defconfig
+# Interactive config always starts from the seed. Detect later .config edits
+# too, preserving the seed-authoritative behavior on the following build.
+if [ -n "$MENU$KMENU" ] || [ ! -f "$OW/.config" ] ||
+	[ "$(cat "$CONFIG_STAMP" 2>/dev/null)" != "$CONFIG_KEY $CONFIG_HASH" ]; then
+	rm -f "$CONFIG_STAMP"
+	cp "$OW/.c5-config.seed" "$OW/.config"
+	(cd "$OW" && make defconfig >/dev/null)
+else
+	log "config unchanged; reusing .config"
+fi
 grep -q '^CONFIG_TARGET_x2600_generic_DEVICE_flashforge_creator5pro=y' "$OW/.config" || die "target not selected"
+printf '%s %s\n' "$CONFIG_KEY" "$(sha256sum < "$OW/.config")" > "$CONFIG_STAMP"
 
 [ -n "$MENU" ] && (cd "$OW" && make menuconfig)
 [ -n "$KMENU" ] && (cd "$OW" && make kernel_menuconfig)
 [ -n "$KCLEAN" ] && (cd "$OW" && make target/linux/clean)
 
 log "build (-j$JOBS)"
-if ! (cd "$OW" && make -j"$JOBS" download world); then
+if ! (cd "$OW" && make -j"$JOBS" world); then
 	log "build failed; rerunning single-threaded for the error"
 	(cd "$OW" && make -j1 V=s world 2>&1 | tail -80)
 	exit 1
