@@ -6,7 +6,7 @@
 #
 # Environment (defaults in brackets):
 #   KSRC   Ingenic SDK kernel-5.10 tree (5.10.186)          [~/ing/kernel-5.10]
-#   KOUT   prepared build dir of KSRC (.config, Module.symvers, scripts/mod)
+#   KOUT   stock-compatible kernel build directory (prepared if needed)
 #                                                           [~/ing/out]
 #   TC     mips-xburst2-linux-toolchain-r6.0.0              [~/ing/mips-xburst2-linux-toolchain-r6.0.0]
 #   STOCK_MODULES  space-separated dirs with stock .ko files to compare the
@@ -16,18 +16,18 @@
 #                  tables must contain every import   [stock 2.0.8 xImage in
 #                  the archive, when present]
 #
-# KOUT is produced by opencreator/c5-usb-serial-modules/build.sh (defconfig
-# x2600_module_base_linux_mmc0_defconfig + HIGHMEM + LOCALVERSION="+",
-# then `make vmlinux modules`). This script never modifies it.
+# chainload/prepare.sh prepares KSRC/KOUT when needed from the verified
+# Ingenic 5.10 SDK. Existing compatible builds are reused. The module itself
+# is built from a temporary source copy.
 #
 # Output: chainload/out/chainload.ko, chainload/out/abi-report.txt
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 OUT=$HERE/out
+TC=$("$HERE/../tools/prepare-toolchain.sh")
+KOUT=$(TC="$TC" "$HERE/prepare.sh")
 KSRC=${KSRC:-$HOME/ing/kernel-5.10}
-KOUT=${KOUT:-$HOME/ing/out}
-TC=${TC:-$HOME/ing/mips-xburst2-linux-toolchain-r6.0.0}
 ARCHIVE=$(cd "$HERE/../../.." && pwd)/creator-5-pro-firmware-archive/kernel/ota_kernel_emmc/ota_v1
 VERMAGIC="5.10.186+ SMP preempt mod_unload MIPS32_R5 32BIT "
 # struct module as compiled into every stock 2.0.7/2.0.8 module:
@@ -47,7 +47,7 @@ fi
 grep -q '^SUBLEVEL = 186$' "$KSRC/Makefile" || die "$KSRC is not Linux 5.10.186"
 [ -x "$TC/bin/mips-xburst2-linux-gnu-gcc" ] || die "no mips-xburst2-linux-gnu-gcc in $TC/bin"
 for f in .config Module.symvers include/config/kernel.release scripts/mod/modpost; do
-	[ -e "$KOUT/$f" ] || die "$KOUT/$f missing: prepare KOUT with opencreator/c5-usb-serial-modules/build.sh"
+	[ -e "$KOUT/$f" ] || die "$KOUT/$f missing after chainload/prepare.sh"
 done
 [ "$(cat "$KOUT/include/config/kernel.release")" = "5.10.186+" ] ||
 	die "$KOUT is not configured for 5.10.186+"

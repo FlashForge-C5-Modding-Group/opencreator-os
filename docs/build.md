@@ -5,22 +5,13 @@ Requires x86-64 Linux and about 50 GB of disk.
 ## 1. Install packages
 
 ```sh
-sudo apt install build-essential clang flex bison g++ gawk gcc-multilib \
+sudo apt install bc build-essential clang flex bison g++ gawk gcc-multilib \
   g++-multilib gettext git libncurses-dev libssl-dev python3-setuptools rsync \
   swig unzip zlib1g-dev file wget curl device-tree-compiler u-boot-tools \
   python3-pil squashfs-tools shellcheck
 ```
 
-## 2. Install the Ingenic toolchain
-
-```sh
-curl -fO -u ingenic_public:BFdg2f9B12 \
-  ftp://ftp.ingenic.com.cn/Ingenic-MIPS-Toolchain/releases/ingenic-mips-toolchain-r6.0.0/mips-xburst2-linux-toolchain-r6.0.0.tar.bz2
-echo "4e3359e32c2fb7d9e573ce84370220a66e3998bb911452d82267394fad4086e0  mips-xburst2-linux-toolchain-r6.0.0.tar.bz2" | sha256sum -c
-mkdir -p ~/ing && tar -xjf mips-xburst2-linux-toolchain-r6.0.0.tar.bz2 -C ~/ing
-```
-
-## 3. Clone the repositories
+## 2. Clone the repositories
 
 ```sh
 git clone https://github.com/FlashForge-C5-Modding-Group/opencreator-os.git
@@ -30,30 +21,50 @@ cd opencreator-os
 
 Run the remaining steps from `opencreator-os/`.
 
-## 4. Build the stick helpers
+## 3. Build the stick helpers
+
+Both helpers prepare the Ingenic toolchain automatically at
+`~/ing/mips-xburst2-linux-toolchain-r6.0.0`. Chainload also extracts and builds
+Ingenic's 5.10.186 kernel for the stock-compatible module. The OS image uses
+the separate 6.6 SDK.
+
+Optional settings must be exported before running the helpers:
+
+| Variable | Use |
+|---|---|
+| `INGENIC_TOOLCHAIN_TARBALL` | Existing `mips-xburst2-linux-toolchain-r6.0.0.tar.bz2` |
+| `INGENIC_510_SDK_TARBALL` | Existing `ingenic-linux-kernel4.4.94-kernel5.10-x2600-v2.0-20230906.tar.bz2` |
+| `INGENIC_SDK_TARBALL` | Existing `ingenic-linux-kernel6.6-x2600-v1.0-20250221.tar.bz2` |
+| `INGENIC_DOWNLOAD_DIR` | Shared archive cache |
+| `WORK` | OS build workspace; default `~/build/opencreator-os` |
+| `TC` | Already-extracted toolchain instead of the default installation |
+| `KSRC` / `KOUT` | 5.10 source / build directory; default `~/ing/kernel-5.10` / `~/ing/out` |
+
+Use absolute Linux/WSL paths. For each archive, setup uses the explicit
+tarball override first, then a cached archive, otherwise downloads it.
+The shared cache defaults to `$WORK/downloads` (or
+`~/build/opencreator-os/downloads` when `WORK` is unset).
+`INGENIC_SDK_DIR` overrides the archive cache for 6.6 only.
+Archives are checksum-verified before extraction; downloads are verified
+before entering the cache. Missing explicit archive paths fail without
+downloading. A checksum mismatch fails without replacing the archive;
+remove or replace a bad cached file before retrying. Missing explicit
+`TC` or `KSRC` also fails.
+Existing extracted trees and prepared build output are reused without
+unpacking or rechecking their archives.
+Explicit pre-extracted `TC` / `KSRC` overrides bypass their corresponding
+archive settings.
 
 ```sh
 installer/tools/build.sh
 chainload/build.sh
 ```
 
-`chainload/build.sh` needs Ingenic's 5.10 kernel tree; see `chainload/README.md`.
-Its SDK is on the same FTP server:
-`/DevSupport/X2600E/01_SW/03_kernel4.4.94_kernel5.10_x2600-sdk_v2.0-20230906/00_ingenic-linux-kernel4.4.94-kernel5.10-x2600-v2.0-20230906/`.
+Output: `installer/tools/out/` and `chainload/out/`. See
+[`chainload/README.md`](../chainload/README.md#build) for the 5.10 preparation
+and ABI checks.
 
-## 5. Build the image
-
-If the 6.6 SDK is already downloaded, set its full Linux/WSL path:
-
-```sh
-export INGENIC_SDK_TARBALL="/mnt/d/ingenic/X2600/06_kernel6.6_x2600-sdk_v1.0-20250221/ingenic-linux-kernel6.6-x2600-v1.0-20250221.tar.bz2"
-```
-
-This overrides `INGENIC_SDK_DIR`; a missing file fails without downloading.
-Otherwise, the SDK is read from `INGENIC_SDK_DIR` (default in
-`kernel/prepare.sh`) or downloaded there from Ingenic's FTP. Before extraction,
-the archive must match the pinned MD5 in `kernel/SOURCE.md`. An existing
-extracted kernel tree is reused without rechecking or unpacking the archive.
+## 4. Build the image
 
 ```sh
 export OUT=~/opencreator-os-builds
@@ -63,20 +74,23 @@ export OUT=~/opencreator-os-builds
 The first build takes hours. Output: `$OUT/<version>/`, where `<version>` is
 `git describe --always --dirty --tags`.
 
-## 6. Build the touchscreen app
+## 5. Build the touchscreen app
+
+The app uses the toolchain installed by step 3. If you exported a custom
+`TC`, first run `export INGENIC_TOOLCHAIN="$TC"`.
 
 ```sh
 (cd ../os-installer && make mips32)
 ```
 
-## 7. Assemble the stick
+## 6. Assemble the stick
 
 ```sh
 tools/make-install-stick.sh --app ../os-installer/build/mips32/os-installer \
     "$OUT/$(git describe --always --dirty --tags)" stick/
 ```
 
-## 8. Copy to a USB stick
+## 7. Copy to a USB stick
 
 Copy the contents of `stick/` to the root of a FAT32 stick (16 GB to fit the
 installer's eMMC backup), then check it from the stick's root:
@@ -86,6 +100,16 @@ sha256sum -c --quiet SHA256SUMS && echo OK
 ```
 
 To install, see `install.md`.
+
+## Source archives
+
+- [Ingenic toolchain r6.0.0](ftp://ftp.ingenic.com.cn/Ingenic-MIPS-Toolchain/releases/ingenic-mips-toolchain-r6.0.0/mips-xburst2-linux-toolchain-r6.0.0.tar.bz2):
+  SHA-256 `4e3359e32c2fb7d9e573ce84370220a66e3998bb911452d82267394fad4086e0`.
+- [5.10 SDK source and MD5](../chainload/README.md#sdk-source).
+- [6.6 SDK source and MD5](../kernel/SOURCE.md).
+
+Downloads use Ingenic's public FTP login. Override it with
+`INGENIC_FTP_USER` / `INGENIC_FTP_PASS` if needed.
 
 ## Tests
 

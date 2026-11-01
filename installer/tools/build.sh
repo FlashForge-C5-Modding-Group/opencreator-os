@@ -9,7 +9,7 @@
 #   installer/tools/build.sh
 #
 # Environment (defaults in brackets):
-#   TC     mips-xburst2-linux-toolchain-r6.0.0              [~/ing/mips-xburst2-linux-toolchain-r6.0.0]
+#   TC     existing mips-xburst2 toolchain; auto-prepared if unset [~/ing/mips-xburst2-linux-toolchain-r6.0.0]
 #   WORK   download and build directory                    [~/build/opencreator-os/sticktools]
 #
 # Output: installer/tools/out/sfdisk, installer/tools/out/partx
@@ -17,7 +17,9 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 OUT=$HERE/out
-TC=${TC:-$HOME/ing/mips-xburst2-linux-toolchain-r6.0.0}
+if [ "${TC+x}" != x ]; then
+	TC=$("$HERE/../../tools/prepare-toolchain.sh")
+fi
 WORK=${WORK:-$HOME/build/opencreator-os/sticktools}
 UL_VER=2.40.2
 UL_TAR=util-linux-$UL_VER.tar.xz

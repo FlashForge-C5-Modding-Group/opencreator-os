@@ -42,18 +42,41 @@ and `setup.sh` were not used.
 
 ## Build
 
-```
+From the repository root:
+
+```sh
 chainload/build.sh
 ```
 
-Requires the Ingenic SDK `kernel-5.10` tree (5.10.186) at
-`~/ing/kernel-5.10`, prepared build directory `~/ing/out` and toolchain
-`~/ing/mips-xburst2-linux-toolchain-r6.0.0`. Override with `KSRC`, `KOUT`
-and `TC`. Prepare `~/ing/out` with
-`opencreator/c5-usb-serial-modules/build.sh`: SDK
-`x2600_module_base_linux_mmc0_defconfig`, `HIGHMEM=y`, `LOCALVERSION="+"`,
-built with `vmlinux modules`. The script leaves that directory unchanged
-and builds in a temporary copy of the module sources.
+The first run prepares the Ingenic toolchain, extracts the SDK's 5.10.186
+source to `~/ing/kernel-5.10`, and builds the kernel prerequisites in
+`~/ing/out`. Later runs reuse the source and prepared output. No build
+from another repository is needed.
+
+To prepare just the prerequisites:
+
+```sh
+chainload/prepare.sh
+```
+
+Preparation prints the build directory on its final stdout line; build
+logs go to stderr. Both entrypoints accept exported `TC` (already-extracted
+toolchain), `KSRC` (existing 5.10 source) and `KOUT` (build directory).
+Missing explicit `TC` or `KSRC` fails rather than replacing that path.
+The default toolchain is `~/ing/mips-xburst2-linux-toolchain-r6.0.0`.
+`JOBS` controls parallel builds (default `nproc`).
+
+Set `INGENIC_510_SDK_TARBALL` to use a local SDK archive. The toolchain and
+SDK otherwise use the shared archive cache or a verified download; see
+the [build guide](../docs/build.md#3-build-the-stick-helpers) for all archive
+and cache overrides. The 5.10 SDK is only for the module that loads under
+stock; the opencreator-os image uses the separate 6.6 SDK.
+
+The prepared config starts from `x2600_module_base_linux_mmc0_defconfig`
+with `HIGHMEM=y`, `LOCALVERSION="+"`, `LOCALVERSION_AUTO=n`,
+`DEBUG_SPINLOCK=y`, `MODULES=y` and `MODVERSIONS=n`. Preparation builds
+`vmlinux modules` to produce `Module.symvers` and `modpost`. The module
+itself is built in a temporary copy of its sources.
 
 Output: `chainload/out/chainload.ko` and `chainload/out/abi-report.txt`.
 The build fails unless all of the following hold:
@@ -69,6 +92,14 @@ The build fails unless all of the following hold:
   `STOCK_XIMAGES`, defaulting to the archived stock 2.0.8 `xImage`.
   Non-exported symbols, including `kernel_restart_prepare` and
   `device_shutdown`, fail the check.
+
+### SDK source
+
+- [Ingenic X2600 SDK v2.0, release00](ftp://ftp.ingenic.com.cn/DevSupport/X2600E/01_SW/03_kernel4.4.94_kernel5.10_x2600-sdk_v2.0-20230906/00_ingenic-linux-kernel4.4.94-kernel5.10-x2600-v2.0-20230906/ingenic-linux-kernel4.4.94-kernel5.10-x2600-v2.0-20230906.tar.bz2)
+  (`ingenic-linux-kernel4.4.94-kernel5.10-x2600-v2.0-20230906.tar.bz2`).
+- MD5: `7c040a22c6a1978385d3f644d9d9a7b7`, from Ingenic's adjacent
+  `md5sum.txt`.
+- Used part: `kernel/kernel-5.10` (Linux 5.10.186).
 
 ### ABI comparison (2026-10-26)
 

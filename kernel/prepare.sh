@@ -5,17 +5,17 @@
 #   kernel/prepare.sh [--work DIR]
 #
 # Env: INGENIC_SDK_TARBALL full path to an existing SDK archive (overrides DIR)
-#      INGENIC_SDK_DIR     where the SDK tarball lives / is downloaded to
+#      INGENIC_SDK_DIR     archive directory (default: shared downloads cache)
 #      INGENIC_FTP_USER    default ingenic_public
 #      INGENIC_FTP_PASS    default BFdg2f9B12 (Ingenic's public login)
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
+source "$HERE/../tools/ingenic-download.sh"
 WORK=${WORK:-$HOME/build/opencreator-os}
 [ "${1:-}" = --work ] && WORK=$2
-SDK_DIR=${INGENIC_SDK_DIR:-/mnt/d/ingenic/X2600/06_kernel6.6_x2600-sdk_v1.0-20250221}
+SDK_DIR=${INGENIC_SDK_DIR:-${INGENIC_DOWNLOAD_DIR:-$WORK/downloads}}
 TARBALL=ingenic-linux-kernel6.6-x2600-v1.0-20250221.tar.bz2
-ARCHIVE=${INGENIC_SDK_TARBALL:-$SDK_DIR/$TARBALL}
 FTP_URL=ftp://ftp.ingenic.com.cn/DevSupport/X2600E/01_SW/06_kernel6.6_x2600-sdk_v1.0-20250221/01_ingenic-linux-kernel6.6-x2600-v1.0-20250221/
 MD5=2ae10ef28565e357051437c6262013e8
 KSRC=$WORK/ingenic-6.6/kernel/kernel-6.6
@@ -23,17 +23,12 @@ KSRC=$WORK/ingenic-6.6/kernel/kernel-6.6
 log() { echo "prepare: $*" >&2; }
 die() { log "$*"; exit 1; }
 
-[ -z "${INGENIC_SDK_TARBALL:-}" ] || [ -f "$ARCHIVE" ] || die "SDK archive not found: $ARCHIVE"
+if [ "${INGENIC_SDK_TARBALL+x}" = x ] && [ ! -f "$INGENIC_SDK_TARBALL" ]; then
+	die "SDK archive not found: $INGENIC_SDK_TARBALL"
+fi
 
 if [ ! -f "$KSRC/Makefile" ]; then
-	if [ ! -f "$ARCHIVE" ]; then
-		mkdir -p "$SDK_DIR"
-		log "downloading $TARBALL (680 MB)"
-		curl -fsS --retry 5 -C - --user "${INGENIC_FTP_USER:-ingenic_public}:${INGENIC_FTP_PASS:-BFdg2f9B12}" \
-			-o "$ARCHIVE" "$FTP_URL$TARBALL"
-	fi
-	log "verifying md5"
-	echo "$MD5  $ARCHIVE" | md5sum -c --quiet - || die "md5 mismatch for $ARCHIVE"
+	ARCHIVE=$(ingenic_archive INGENIC_SDK_TARBALL "$SDK_DIR" "$TARBALL" md5sum "$MD5" "$FTP_URL$TARBALL")
 	log "unpacking kernel/kernel-6.6"
 	mkdir -p "$WORK/ingenic-6.6"
 	tar -xjf "$ARCHIVE" -C "$WORK/ingenic-6.6" --strip-components=1 --wildcards '*/kernel/kernel-6.6/*'
