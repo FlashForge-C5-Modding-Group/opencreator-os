@@ -57,13 +57,22 @@ mkdir -p "$RUNROOT"
 ls -1d "$QWORK"/runs/2*/ 2>/dev/null | head -n -"${KEEP_RUNS:-3}" | xargs -r rm -rf
 
 OWRT_OK=1
-build_openwrt_fixture || OWRT_OK=0
-if [ "$OWRT_OK" = 1 ]; then
+OWRT_RC=0
+build_openwrt_fixture || OWRT_RC=$?
+case "$OWRT_RC" in
+0)
 	echo "OpenWrt artifacts: $OWRT_ART-* (refresh base-files: ${QEMU_REFRESH_ROOTFS:-1})"
 	remember_base
-else
+	;;
+77)
+	OWRT_OK=0
 	echo "OpenWrt root.squashfs not found ($OWRT_ART-root.squashfs): every scenario is skipped" >&2
-fi
+	;;
+*)
+	echo "OpenWrt fixture build failed (status $OWRT_RC); no scenarios were run" >&2
+	exit 2
+	;;
+esac
 echo "runs: $RUNROOT (${JOBS} at a time)"
 
 # run_scenario S: scenario_S in $RUNROOT/S; the result line goes to

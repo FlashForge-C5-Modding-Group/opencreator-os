@@ -85,7 +85,7 @@ flow_install() { # NAME [make-install-stick options]
 	local name=$1 st
 	shift
 	make_payload "$RUN/payload-$name" "$@" || { fatal "make-install-stick.sh failed: $(tail -n 2 "$RUN/make-install-stick.log" | tr "\n" " ")"; return 1; }
-	make_stick "$RUN/payload-$name" "$RUN/stick-$name.img"
+	make_stick "$RUN/payload-$name" "$RUN/stick-$name.img" || { fatal "make_stick failed"; return 1; }
 	st=$RUN/$name.steps
 	steps_stock "$st"
 	boot "$name" "$DISK" "$(spl_root "$DISK")" "$st" "$RUN/stick-$name.img"
@@ -316,7 +316,7 @@ scenario_S4() {
 	check "fallback resets counter" is_eq "$(img_tries "$DISK")" "C5TRIES1 0"
 	check "fallback records last-test on c5os" bash -c "printf '%s\n' \"\$1\" | grep -qxE 'failed [^ ]+ boot counter: 3 boots of slot 1 did not become healthy'" _ "$(c5os_cat "$DISK" /opencreator-os/last-test)"
 	make_payload "$RUN/payload-s4" || { fatal "make-install-stick.sh failed"; return 0; }
-	make_stick "$RUN/payload-s4" "$RUN/stick-s4.img"
+	make_stick "$RUN/payload-s4" "$RUN/stick-s4.img" || { fatal "make_stick failed"; return 1; }
 	steps_stock "$RUN/s4-stock.steps"
 	boot s4-stock "$DISK" "$(spl_root "$DISK")" "$RUN/s4-stock.steps" "$RUN/stick-s4.img"
 	check "stock boots after three failed OpenWrt boots" log_has s4-stock '^QEMU-STOCK-DONE flag=ota:kernel2'
@@ -412,7 +412,7 @@ EOF
 	prepare_committed || return 0
 	c5os_rm "$DISK" /opencreator-os/last-test  # no "OpenWrt installed" screen first
 	make_ui_payload "$RUN/payload-s5-repair" "menu_main=1 hold=main" || { fatal "make-install-stick.sh failed"; return 0; }
-	make_stick "$RUN/payload-s5-repair" "$RUN/stick-s5-repair.img"
+	make_stick "$RUN/payload-s5-repair" "$RUN/stick-s5-repair.img" || { fatal "make_stick failed"; return 1; }
 	cat > "$RUN/s5-repair.steps" <<'EOF'
 shell 400
 run 600 held i=0; until [ -f /tmp/qemu-ui-held ]; do i=$((i+1)); [ $i -lt 600 ] || exit 1; sleep 1; done
@@ -444,8 +444,8 @@ EOF
 	make_ui_payload "$RUN/payload-s5-a" "menu_main=1 hold=main" || { fatal "make-install-stick.sh failed"; return 0; }
 	rm -f "$RUN/payload-s5-a/sysupgrade.tar"
 	cp "$RUN/v2.tar" "$RUN/payload-s5-a/sysupgrade.tar"
-	resum "$RUN/payload-s5-a"
-	make_stick "$RUN/payload-s5-a" "$RUN/stick-s5-a.img"
+	resum "$RUN/payload-s5-a" || { fatal "payload checksums failed"; return 1; }
+	make_stick "$RUN/payload-s5-a" "$RUN/stick-s5-a.img" || { fatal "make_stick failed"; return 1; }
 	v2sum=$(sha256sum < "$RUN/v2-root.squashfs" | cut -d' ' -f1)
 	v2len=$(stat -c %s "$RUN/v2-root.squashfs")
 	v2ksum=$(sha256sum < "$RUN/v2-kernel.uimage" | cut -d' ' -f1)
@@ -554,7 +554,7 @@ scenario_S6() {
 	local st=$RUN/s6-repair.steps stick=$RUN/stick-s6.img
 	make_payload "$RUN/payload-s6" || { fatal "make-install-stick.sh failed"; return 0; }
 	printf 'repair-stock\r\n' > "$RUN/payload-s6/opencreator-os/ACTION"
-	make_stick "$RUN/payload-s6" "$stick"
+	make_stick "$RUN/payload-s6" "$stick" || { fatal "make_stick failed"; return 1; }
 	printf 'shell 400\nsend logread -f\nexpect 900 reboot: Restarting system\nwait-exit 240\n' > "$st"
 	boot_openwrt s6-repair "$DISK" "$(spl_root "$DISK")" "$st" "$stick"
 	check "headless repair reboots to stock" is_eq "$(boot_outcome s6-repair):$(img_flag "$DISK")" reboot:ota:kernel2
@@ -584,7 +584,7 @@ scenario_S6() {
 	new_disk
 	prepare_committed || return 0
 	printf 'swap\n' > "$RUN/payload-s6/opencreator-os/ACTION"
-	make_stick "$RUN/payload-s6" "$stick"
+	make_stick "$RUN/payload-s6" "$stick" || { fatal "make_stick failed"; return 1; }
 	boot_openwrt s6-swap "$DISK" "$(spl_root "$DISK")" "$st" "$stick"
 	check "headless swap selects stock and reboots" is_eq "$(boot_outcome s6-swap):$(img_flag "$DISK")" reboot:ota:kernel2
 	check "swap resets tries" is_eq "$(img_tries "$DISK")" "C5TRIES1 0"
@@ -612,7 +612,7 @@ EOF
 	local dmg
 	dmg=$(img_part_sum "$DISK" 3 $((PSIZE[3] * 512)))$(img_part_sum "$DISK" 4 "$STOCK_SQ_LEN")
 	make_ui_payload "$RUN/payload-s6-ui" "menu_main=3 confirm_repair-stock=cancel hold=main" || { fatal "make-install-stick.sh failed"; return 0; }
-	make_stick "$RUN/payload-s6-ui" "$RUN/stick-s6-ui.img"
+	make_stick "$RUN/payload-s6-ui" "$RUN/stick-s6-ui.img" || { fatal "make_stick failed"; return 1; }
 	steps_openwrt "$RUN/s6-ui-cancel.steps" <<'EOF'
 run 120 held i=0; until [ -f /tmp/qemu-ui-held ]; do i=$((i+1)); [ $i -lt 120 ] || exit 1; sleep 1; done; [ ! -f /tmp/qemu-ui-release ] && pidof dropbear && ifstatus lan | grep '"up": true'
 run 30 release touch /tmp/qemu-ui-release
@@ -626,7 +626,7 @@ EOF
 	check "app: Cancel ends with Continue (status 1)" log_has s6-ui-cancel '^QEMU-UI-CONTINUE 1$'
 	check "app: Cancel writes nothing" is_eq "$(img_flag "$DISK"):$(img_part_sum "$DISK" 3 $((PSIZE[3] * 512)))$(img_part_sum "$DISK" 4 "$STOCK_SQ_LEN")" "ota:kernel:$dmg"
 	make_ui_payload "$RUN/payload-s6-ui" "menu_main=3 confirm_repair-stock=ok" || { fatal "make-install-stick.sh failed"; return 0; }
-	make_stick "$RUN/payload-s6-ui" "$RUN/stick-s6-ui.img"
+	make_stick "$RUN/payload-s6-ui" "$RUN/stick-s6-ui.img" || { fatal "make_stick failed"; return 1; }
 	printf 'expect 600 ^QEMU-UI CONFIRM repair-stock \nexpect 900 reboot: Restarting system\nwait-exit 240\n' > "$RUN/s6-ui-repair.steps"
 	boot_openwrt s6-ui-repair "$DISK" "$(spl_root "$DISK")" "$RUN/s6-ui-repair.steps" "$RUN/stick-s6-ui.img"
 	check "app: Repair stock repairs and reboots to stock" is_eq "$(boot_outcome s6-ui-repair):$(img_flag "$DISK"):$(img_part_sum "$DISK" 3 $((PSIZE[3] * 512)))$(img_part_sum "$DISK" 4 "$STOCK_SQ_LEN")" "reboot:ota:kernel2:$BASE_P3$STOCK_SQ_SUM"
@@ -688,7 +688,7 @@ scenario_S7() {
 	check "precondition: slot 1 holds OpenWrt" is_eq "$(img_part_sum "$DISK" 2 "$OW_SQ_LEN")" "$OW_SQ_SUM"
 	"$QREPO/tools/make-restore-stick.sh" "$bk" "$RUN/restore-payload" --slot1 --flag-stock > "$RUN/make-restore-stick.log" 2>&1 ||
 		{ fatal "make-restore-stick.sh failed: $(tail -n 2 "$RUN/make-restore-stick.log")"; return 0; }
-	make_stick "$RUN/restore-payload" "$RUN/stick-restore.img"
+	make_stick "$RUN/restore-payload" "$RUN/stick-restore.img" || { fatal "make_stick failed"; return 1; }
 	local st=$RUN/s7-restore.steps
 	steps_stock "$st"
 	boot s7-restore "$DISK" "$(spl_root "$DISK")" "$st" "$RUN/stick-restore.img"
@@ -713,7 +713,7 @@ scenario_S8() {
 	make_payload "$p" || { fatal "make-install-stick.sh failed"; return 0; }
 	# flip one byte in the middle of the squashfs (magic intact)
 	printf '\xff' | dd of="$p/root.squashfs" bs=1 seek=$(($(stat -c %s "$p/root.squashfs") / 2)) conv=notrunc status=none
-	make_stick "$p" "$RUN/stick-s8.img"
+	make_stick "$p" "$RUN/stick-s8.img" || { fatal "make_stick failed"; return 1; }
 	st=$RUN/s8.steps
 	steps_stock "$st"
 	boot s8 "$DISK" "$(spl_root "$DISK")" "$st" "$RUN/stick-s8.img"
@@ -731,7 +731,7 @@ scenario_S8() {
 		{ fatal "cannot fill c5os for the space preflight"; return 0; }
 	rm -f "$RUN/c5os-fill.bin"
 	make_payload "$p" || { fatal "make-install-stick.sh failed"; return 0; }
-	make_stick "$p" "$RUN/stick-s8-full.img"
+	make_stick "$p" "$RUN/stick-s8-full.img" || { fatal "make_stick failed"; return 1; }
 	boot s8-full "$DISK" "$(spl_root "$DISK")" "$st" "$RUN/stick-s8-full.img"
 	check "full c5os refused by space preflight" log_has s8-full 'abort: c5os has [0-9]+ MiB free, need [0-9]+ MiB'
 	check "full c5os: no slot write started" log_lacks s8-full '^write: '
@@ -745,7 +745,7 @@ scenario_S8() {
 scenario_S9() {
 	new_disk
 	make_payload "$RUN/payload-s9" || { fatal "make-install-stick.sh failed"; return 0; }
-	make_stick "$RUN/payload-s9" "$RUN/stick-s9.img"
+	make_stick "$RUN/payload-s9" "$RUN/stick-s9.img" || { fatal "make_stick failed"; return 1; }
 	local st=$RUN/s9-cut.steps
 	echo 'kill-when 400 ^write: root\.squashfs' > "$st"
 	boot s9-cut "$DISK" "$(spl_root "$DISK")" "$st" "$RUN/stick-s9.img"
@@ -790,7 +790,7 @@ scenario_S12() {
 		{ fatal "make-install-stick.sh failed: $(tail -n 2 "$RUN/make-install-stick.log" | tr '\n' ' ')"; return 0; }
 	printf "SSID='QEMU Stick Override'\nPSK='stick-override-123'\n" > "$RUN/payload-s12/opencreator-os/wifi.conf"
 	echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f qemu-fixture' > "$RUN/payload-s12/opencreator-os/authorized_keys"
-	make_stick "$RUN/payload-s12" "$stick" 3072
+	make_stick "$RUN/payload-s12" "$stick" 3072 || { fatal "make_stick failed"; return 1; }
 	ui_stock_boot s12-stock "$stick" 2400
 	check "stock kernel: no valid backup GPT before the repartition" log_has s12-stock 'Alternate GPT is invalid'
 	check "menu shown" log_has s12-stock '^QEMU-UI MENU main '
@@ -874,9 +874,9 @@ EOF
 echo "QEMU: kernel partition update unavailable" >&2
 exit 1
 EOF
-	resum "$RUN/payload-s12-reread"
+	resum "$RUN/payload-s12-reread" || { fatal "payload checksums failed"; return 1; }
 	stick=$RUN/stick-s12-reread.img
-	make_stick "$RUN/payload-s12-reread" "$stick"
+	make_stick "$RUN/payload-s12-reread" "$stick" || { fatal "make_stick failed"; return 1; }
 	ui_stock_boot s12-reread "$stick"
 	check "c5os: stale kernel partitions request a real reboot" is_eq "$(boot_outcome s12-reread):$(img_flag "$DISK")" reboot:ota:kernel2
 	check "c5os: reboot screen shown" log_has s12-reread '^QEMU-UI INFO c5os-reboot '
@@ -899,7 +899,7 @@ scenario_S13() {
 	rm -f "$RUN/big.bin"
 	make_ui_payload "$RUN/payload-s13a" "menu=1" || { fatal "make-install-stick.sh failed"; return 0; }
 	stick=$RUN/stick-s13a.img
-	make_stick "$RUN/payload-s13a" "$stick"
+	make_stick "$RUN/payload-s13a" "$stick" || { fatal "make_stick failed"; return 1; }
 	ui_stock_boot s13-full "$stick"
 	check "full userdata: blocked before the menu, with Boot to stock" log_has s13-full '^QEMU-UI BLOCK c5os-space Please free [0-9]+ MB on /usr/data.*Tap Boot to stock.*\|Boot to stock'
 	check "full userdata: Boot to stock tapped" log_has s13-full '^QEMU-UI-TAP Boot to stock'
@@ -914,7 +914,7 @@ scenario_S13() {
 		new_stock_disk
 		make_ui_payload "$RUN/payload-s13-$c" "menu=1 confirm_backup=cancel confirm_c5os=$c" || { fatal "make-install-stick.sh failed"; return 0; }
 		stick=$RUN/stick-s13-$c.img
-		make_stick "$RUN/payload-s13-$c" "$stick"
+		make_stick "$RUN/payload-s13-$c" "$stick" || { fatal "make_stick failed"; return 1; }
 		if [ "$c" = cancel ]; then
 			cat > "$RUN/unknown-model.sh" <<'EOF'
 mount -t vfat /dev/sda1 /mnt
@@ -965,7 +965,7 @@ scenario_S14() {
 	check "install test-booted slot 1, flag left on stock" is_eq "$(boot_outcome s14-install):$(img_flag "$DISK")" "chainload:$OWRT_ROOT:ota:kernel2"
 	c5os_rm "$DISK" /opencreator-os/pending-commit
 	make_ui_payload "$RUN/payload-s14" "menu=2 menu_installed=1" || { fatal "make-install-stick.sh failed"; return 0; }
-	make_stick "$RUN/payload-s14" "$stick"
+	make_stick "$RUN/payload-s14" "$stick" || { fatal "make_stick failed"; return 1; }
 	ui_stock_boot s14-a "$stick"
 	check "stock UI reports the hung test before the menu" log_has s14-a '^QEMU-UI CONFIRM test-failed 0 OpenWrt test failed\\nhung before OpenWrt started \(watchdog reset\)\\nStock is unchanged and boots normally\.\|Try again\|Boot to stock$'
 	check "Try again goes on to the menu" bash -c "grep -n -e '^QEMU-UI CONFIRM test-failed ' -e '^QEMU-UI MENU main ' \"\$1\" | cut -d' ' -f2 | tr '\n' ' ' | grep -qx 'CONFIRM MENU '" _ "$RUN/s14-a.log"
@@ -988,7 +988,7 @@ scenario_S14() {
 	check "Rebooting into OpenWrt, then the app ends without Continue" bash -c "grep -q '^QEMU-UI INFO reboot Rebooting into OpenWrt' \"\$1\" && ! grep -q '^QEMU-UI-CONTINUE' \"\$1\"" _ "$RUN/s14-a-openwrt.log"
 	check "installed screen marked seen before the reboot" is_eq "$(c5os_cat "$DISK" /opencreator-os/last-test.seen | cut -d' ' -f1):$(c5os_has "$DISK" /opencreator-os/last-test && echo left)" "ok:"
 	make_ui_payload "$RUN/payload-s14-n" "menu=0" || { fatal "make-install-stick.sh failed"; return 0; }
-	make_stick "$RUN/payload-s14-n" "$RUN/stick-s14-n.img"
+	make_stick "$RUN/payload-s14-n" "$RUN/stick-s14-n.img" || { fatal "make_stick failed"; return 1; }
 	steps_openwrt "$RUN/s14-a-next.steps" < /dev/null
 	boot_openwrt s14-a-next "$DISK" "$(spl_root "$DISK")" "$RUN/s14-a-next.steps" "$RUN/stick-s14-n.img"
 	check "next boot is OpenWrt (slot 1)" res_has s14-a-next cmdline 'root=/dev/mmcblk0p2'
@@ -1021,7 +1021,7 @@ scenario_S14() {
 	check "headless retry: stock continued" log_has s14-again '^QEMU-STOCK-HOOK continue'
 	check "headless retry: flag stays on stock" is_eq "$(img_flag "$DISK")" ota:kernel2
 	make_ui_payload "$RUN/payload-s14-re" "menu=1 confirm_backup=cancel" || { fatal "make-install-stick.sh failed"; return 0; }
-	make_stick "$RUN/payload-s14-re" "$RUN/stick-s14-re.img"
+	make_stick "$RUN/payload-s14-re" "$RUN/stick-s14-re.img" || { fatal "make_stick failed"; return 1; }
 	ui_stock_boot s14-reinstall "$RUN/stick-s14-re.img"
 	check "same-build reinstall: known-good kernel, no test boot" log_has s14-reinstall 'switch: slot 1 kernel matches c5os good-kernel; no test boot'
 	check "same-build reinstall never chainloads" log_lacks s14-reinstall '^QEMU-CHAINLOAD '
@@ -1034,7 +1034,7 @@ scenario_S14() {
 	printf 'ota:kernel2\n' | dd of="$DISK" bs=512 seek="${PSTART[5]}" conv=sync,notrunc status=none
 	c5os_rm "$DISK" /opencreator-os/last-test
 	make_ui_payload "$RUN/payload-s14-swap-good" "menu=2" || { fatal "make-install-stick.sh failed"; return 0; }
-	make_stick "$RUN/payload-s14-swap-good" "$RUN/stick-s14-swap-good.img"
+	make_stick "$RUN/payload-s14-swap-good" "$RUN/stick-s14-swap-good.img" || { fatal "make_stick failed"; return 1; }
 	ui_stock_boot s14-swap-good "$RUN/stick-s14-swap-good.img"
 	check "known-good stock swap directly selects OpenWrt and reboots" is_eq "$(boot_outcome s14-swap-good):$(img_flag "$DISK")" reboot:ota:kernel
 	check "known-good stock swap never chainloads" log_lacks s14-swap-good '^QEMU-CHAINLOAD '
@@ -1068,7 +1068,7 @@ scenario_S15() {
 	debugfs -w -R "ssv volume_name c5os" "$(c5os_spec "$DISK")" >/dev/null 2>&1
 
 	make_ui_payload "$RUN/payload-s15" "confirm_test-failed=cancel" || { fatal "make-install-stick.sh failed"; return 0; }
-	make_stick "$RUN/payload-s15" "$stick"
+	make_stick "$RUN/payload-s15" "$stick" || { fatal "make_stick failed"; return 1; }
 	ui_stock_boot s15-report "$stick"
 	check "stock UI: OpenWrt test failed, with the reason" log_has s15-report '^QEMU-UI CONFIRM test-failed 0 OpenWrt test failed\\nc5os not mounted at /data\\nStock is unchanged and boots normally\.\|Try again\|Boot to stock$'
 	check "stock UI: Boot to stock skips the menu" log_lacks s15-report '^QEMU-UI MENU '
@@ -1078,7 +1078,7 @@ scenario_S15() {
 
 	# Swap to OpenWrt from the app, then a test boot that stalls past the deadline
 	make_ui_payload "$RUN/payload-s15b" "menu=2" || { fatal "make-install-stick.sh failed"; return 0; }
-	make_stick "$RUN/payload-s15b" "$stick"
+	make_stick "$RUN/payload-s15b" "$stick" || { fatal "make_stick failed"; return 1; }
 	ui_stock_boot s15-swap "$stick"
 	check "swap: no report again" log_lacks s15-swap '^QEMU-UI CONFIRM test-failed '
 	check "swap: test boot of slot 1" is_eq "$(boot_outcome s15-swap)" "chainload:$OWRT_ROOT"
@@ -1154,7 +1154,7 @@ scenario_S17() {
 		{ fatal "make-install-stick.sh failed"; return 0; }
 	mkdir -p "$RUN/payload-s17/qemu"
 	cp "$QDIR/fixtures/migrate-stock.sh" "$RUN/payload-s17/qemu/migrate-stock.sh"
-	make_stick "$RUN/payload-s17" "$stick"
+	make_stick "$RUN/payload-s17" "$stick" || { fatal "make_stick failed"; return 1; }
 	cat > "$RUN/s17.steps" <<'EOF'
 shell 400
 run 600 waitboot i=0; until dmesg | grep -q 'c5: booted: slot 1 healthy'; do i=$((i+1)); [ $i -lt 600 ] || exit 1; sleep 1; done

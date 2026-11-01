@@ -51,6 +51,36 @@ Passed images are deleted; failed images are kept. Only the last
 `KEEP_RUNS` run directories are kept, default 3. Concurrent runs require
 different `QWORK`s.
 
+## Rerunning and logs
+
+Reruns reuse the downloaded sources, kernel object directory and completed
+QEMU kernel/modules in `QWORK`. A kernel config or build-script change can
+trigger an incremental build using those objects. Fixture changes refresh
+the test rootfs; they do not rebuild the OpenWrt image or the 5.10 chainload
+kernel. Scenarios run again on each invocation.
+
+Rootfs refreshes use a new temporary staging directory rather than reusing
+an old `openwrt-stage`. Extraction, copying, permissions and packing errors
+abort setup; only missing OpenWrt artifacts intentionally skip scenarios.
+
+Run the tests as your normal user, not with `sudo`. If an earlier root run
+left your own `QWORK` cache root-owned, restore its ownership without
+deleting the cached builds:
+
+```sh
+sudo chown -R -- "$(id -u):$(id -g)" "${QWORK:-$HOME/build/opencreator-os/qemu}"
+```
+
+Per-scenario stick assembly is saved in
+`$QWORK/runs/<timestamp>/<scenario>/make-install-stick.log`. Kernel builds
+and fixture preparation print to the terminal. To capture the whole run
+and preserve its failure status:
+
+```sh
+set -o pipefail
+test/qemu/run.sh 2>&1 | tee "$HOME/qemu-run.log"
+```
+
 ## What is real and what is emulated
 
 | Piece | In the tests |

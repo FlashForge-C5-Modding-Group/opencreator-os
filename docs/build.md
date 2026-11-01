@@ -111,7 +111,10 @@ To install, see `install.md`.
 Downloads use Ingenic's public FTP login. Override it with
 `INGENIC_FTP_USER` / `INGENIC_FTP_PASS` if needed.
 
-## Tests
+## Optional QEMU tests
+
+These validate the installer in an emulator; they are not required to build
+or assemble the install stick. The first run builds a separate test kernel.
 
 ```sh
 OWRT_BUILDS=$OUT test/qemu/run.sh -j 8

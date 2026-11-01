@@ -276,55 +276,84 @@ build_c5os_disk() {
 # the working tree's feed/x2600/base-files and the QEMU kernel's USB Ethernet
 # modules laid over it (QEMU_REFRESH_ROOTFS=0 tests the build artifact
 # unchanged).
-build_openwrt_fixture() {
-	local src=$OWRT_ART-root.squashfs key stage
-	[ -s "$src" ] || return 1
+build_openwrt_fixture() (
+	# A subshell keeps pipefail and cleanup local even when the caller handles
+	# failure with || (which disables Bash's implicit errexit handling).
+	set -o pipefail
+	local src=$OWRT_ART-root.squashfs key stamp work stage f
+	# Only absent artifacts are an intentional skip; build errors are fatal.
+	[ -e "$src" ] || return 77
+	[ -s "$src" ] || { echo "fixture: empty OpenWrt artifact: $src" >&2; return 1; }
+	stamp=$(stat -c %Y-%s "$src") || return 1
 	if [ "${QEMU_REFRESH_ROOTFS:-1}" = 0 ]; then
-		key=artifact-$(stat -c %Y-%s "$src")
+		key=artifact-$stamp
 	else
-		key=refresh-$(stat -c %Y-%s "$src")-${VMLINUX##*/}-$( { declare -f build_openwrt_fixture; cd "$QREPO/feed/x2600/base-files" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum; } | sha256sum | cut -c1-16)
+		key=$( {
+			declare -f build_openwrt_fixture
+			cd "$QREPO/feed/x2600/base-files" || exit 1
+			find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
+		} | sha256sum | cut -c1-16) || return 1
+		key=refresh-$stamp-${VMLINUX##*/}-$key
 	fi
 	if [ -s "$OWRT_SQFS" ] && [ "$(cat "$OWRT_SQFS.key" 2>/dev/null)" = "$key" ]; then
 		return 0
 	fi
-	rm -f "$OWRT_SQFS"
+	mkdir -p "$FIX" || return 1
+	# Never reuse or remove a previous user's extraction. In particular, old
+	# root-owned openwrt-stage trees must not poison an unprivileged refresh.
+	work=$(mktemp -d "$FIX/openwrt-build.XXXXXX") || {
+		echo "fixture: cannot create staging directory in $FIX; make that directory writable by your build user" >&2
+		return 1
+	}
+	trap 'rm -rf "$work"' EXIT
+	stage=$work/root
 	if [ "${QEMU_REFRESH_ROOTFS:-1}" = 0 ]; then
-		cp "$src" "$OWRT_SQFS"
+		cp "$src" "$work/root.squashfs" || return 1
 	else
 		echo "fixture: OpenWrt root + working-tree base-files" >&2
-		stage=$FIX/openwrt-stage
-		rm -rf "$stage"
-		# device nodes cannot be created unprivileged; OpenWrt's image has
-		# only /dev/console, recreated below as a pseudo file
-		unsquashfs -q -n -d "$stage" "$src" >/dev/null 2>&1 || [ -x "$stage/sbin/procd" ] || return 1
+		# Exclude only the known device node that cannot be created without
+		# root; every other extraction error is fatal. Recreate it when packing.
+		unsquashfs -q -n -excludes -d "$stage" "$src" dev/console >/dev/null || return 1
 		# Replace the target-owned namespace, not just Git's unstaged deletions:
 		# an older artifact must refresh identically after staging or committing.
-		rm -rf "$stage/lib/c5"
+		rm -rf "$stage/lib/c5" || return 1
 		rm -f "$stage"/lib/preinit/*c5* "$stage"/usr/libexec/c5* \
 			"$stage"/usr/sbin/c5* "$stage"/etc/init.d/c5* \
-			"$stage"/etc/uci-defaults/*c5*
+			"$stage"/etc/uci-defaults/*c5* || return 1
 		(cd "$QREPO/feed/x2600/base-files" && find . -type f -print0 | xargs -0 -I{} sh -c '
-			mkdir -p "$(dirname "$1/$2")" && cp -f "$2" "$1/$2" && chmod "$(stat -c %a "$2")" "$1/$2"' _ "$stage" {})
+			mkdir -p "$(dirname "$1/$2")" && cp -f "$2" "$1/$2" && chmod "$(stat -c %a "$2")" "$1/$2"' _ "$stage" {}) || return 1
 		# git file modes (the F: checkout may show everything as 0777/0644)
 		git -C "$QREPO" ls-files -s feed/x2600/base-files | while read -r mode _ _ path; do
 			f=$stage/${path#feed/x2600/base-files/}
 			[ -f "$f" ] || continue
-			if [ "$mode" = 100755 ]; then chmod 0755 "$f"; else chmod 0644 "$f"; fi
-		done
-		chmod 0755 "$stage/etc/init.d/c5-usb-hook" "$stage/usr/libexec/c5-usb-hook"
-		ln -sf ../init.d/c5-usb-hook "$stage/etc/rc.d/S19c5-usb-hook"
+			if [ "$mode" = 100755 ]; then
+				chmod 0755 "$f" || exit 1
+			else
+				chmod 0644 "$f" || exit 1
+			fi
+		done || return 1
+		chmod 0755 "$stage/etc/init.d/c5-usb-hook" "$stage/usr/libexec/c5-usb-hook" || return 1
+		ln -sf ../init.d/c5-usb-hook "$stage/etc/rc.d/S19c5-usb-hook" || return 1
 		for f in "$stage"/etc/rc.d/*c5*; do
-			[ -e "$f" ] || rm -f "$f"
+			if [ ! -e "$f" ]; then rm -f "$f" || return 1; fi
 		done
 		# the QEMU kernel's usbnet/cdc_ether (kernel/build.sh): the image's
 		# kmod-usb-net autoload entries load them at boot (S16)
-		mkdir -p "$stage/lib/modules/$KVER"
-		cp "$VMLINUX.modules"/*.ko "$stage/lib/modules/$KVER/"
-		mksquashfs "$stage" "$OWRT_SQFS" -noappend -all-root -quiet -comp xz -b 256k \
-			-p '/dev/console c 600 0 0 5 1' >/dev/null
+		mkdir -p "$stage/lib/modules/$KVER" || return 1
+		cp "$VMLINUX.modules"/*.ko "$stage/lib/modules/$KVER/" || return 1
+		mksquashfs "$stage" "$work/root.squashfs" -noappend -all-root -quiet -comp xz -b 256k \
+			-exit-on-error -p '/dev/console c 600 0 0 5 1' >/dev/null || return 1
 	fi
-	echo "$key" > "$OWRT_SQFS.key"
-}
+	printf '%s\n' "$key" > "$work/root.key" || return 1
+	# Keep the old fixture until the replacement is complete. Invalidate the
+	# cache before publishing; a failed rename must never leave a success key.
+	rm -f "$OWRT_SQFS.key" || return 1
+	mv -fT "$work/root.squashfs" "$OWRT_SQFS" || return 1
+	mv -fT "$work/root.key" "$OWRT_SQFS.key" || {
+		rm -f "$OWRT_SQFS" "$OWRT_SQFS.key"
+		return 1
+	}
+)
 
 # ---------------------------------------------------------------- sticks --
 
@@ -333,14 +362,14 @@ build_openwrt_fixture() {
 make_payload() {
 	local out=$1 vdir=$RUN/vdir/qemu-test
 	shift
-	rm -rf "$vdir" "$out"
-	mkdir -p "$vdir"
-	ln -s "$OWRT_SQFS" "$vdir/${OWRT_ART##*/}-root.squashfs"
-	ln -s "$OWRT_ART-kernel.uimage" "$vdir/${OWRT_ART##*/}-kernel.uimage"
-	ln -s "$OWRT_ART-sysupgrade.tar" "$vdir/${OWRT_ART##*/}-sysupgrade.tar"
+	rm -rf "$vdir" "$out" || return 1
+	mkdir -p "$vdir" || return 1
+	ln -s "$OWRT_SQFS" "$vdir/${OWRT_ART##*/}-root.squashfs" || return 1
+	ln -s "$OWRT_ART-kernel.uimage" "$vdir/${OWRT_ART##*/}-kernel.uimage" || return 1
+	ln -s "$OWRT_ART-sysupgrade.tar" "$vdir/${OWRT_ART##*/}-sysupgrade.tar" || return 1
 	"$QREPO/tools/make-install-stick.sh" "$@" "$vdir" "$out" > "$RUN/make-install-stick.log" 2>&1 || return 1
-	fake_chainload > "$out/chainload/c5-chainload.sh"
-	chmod 0755 "$out/chainload/c5-chainload.sh"
+	fake_chainload > "$out/chainload/c5-chainload.sh" || return 1
+	chmod 0755 "$out/chainload/c5-chainload.sh" || return 1
 	resum "$out"
 }
 
@@ -352,10 +381,10 @@ make_ui_payload() {
 	local out=$1 conf=$2
 	shift 2
 	make_payload "$out" "$@" || return 1
-	mkdir -p "$out/qemu"
-	install -m 0755 "$QDIR/fixtures/fake-ui.sh" "$out/qemu/fake-ui.sh"
-	printf '%s\n' $conf > "$out/qemu/ui.conf"
-	install -m 0755 "$QDIR/fixtures/qemu-ui-hook.sh" "$out/runFirmwareExe.sh"
+	mkdir -p "$out/qemu" || return 1
+	install -m 0755 "$QDIR/fixtures/fake-ui.sh" "$out/qemu/fake-ui.sh" || return 1
+	printf '%s\n' $conf > "$out/qemu/ui.conf" || return 1
+	install -m 0755 "$QDIR/fixtures/qemu-ui-hook.sh" "$out/runFirmwareExe.sh" || return 1
 	resum "$out"
 }
 
@@ -363,18 +392,18 @@ make_ui_payload() {
 # embedded as function c5cl_real (used for its "args" computation)
 fake_chainload() {
 	local f=$QDIR/fixtures/fake-c5-chainload.sh
-	head -n 1 "$f"
-	echo "c5cl_real() {"
-	echo "cat <<'C5CL_REAL_EOF'"
-	cat "$QREPO/chainload/c5-chainload.sh"
-	echo "C5CL_REAL_EOF"
-	echo "}"
+	head -n 1 "$f" || return 1
+	echo "c5cl_real() {" || return 1
+	echo "cat <<'C5CL_REAL_EOF'" || return 1
+	cat "$QREPO/chainload/c5-chainload.sh" || return 1
+	echo "C5CL_REAL_EOF" || return 1
+	echo "}" || return 1
 	tail -n +2 "$f"
 }
 
 resum() { # DIR: recompute SHA256SUMS/MD5SUMS over the files they list
 	local l
-	l=$(awk '{ f = $2; sub(/^\*/, "", f); print f }' "$1/SHA256SUMS")
+	l=$(awk '{ f = $2; sub(/^\*/, "", f); print f }' "$1/SHA256SUMS") || return 1
 	(cd "$1" && printf '%s\n' "$l" | xargs -d '\n' sha256sum > SHA256SUMS.new &&
 		printf '%s\n' "$l" | xargs -d '\n' md5sum > MD5SUMS.new &&
 		mv SHA256SUMS.new SHA256SUMS && mv MD5SUMS.new MD5SUMS)
@@ -384,11 +413,11 @@ resum() { # DIR: recompute SHA256SUMS/MD5SUMS over the files they list
 # partition (/dev/sda1)
 make_stick() {
 	local img=$2 mb=${3:-256}
-	rm -f "$img"
-	truncate -s "${mb}M" "$img"
-	echo '2048,,c' | sfdisk -q "$img" >/dev/null
-	mkfs.vfat -F 32 -n C5STICK --offset 2048 "$img" $((mb * 1024 - 1024)) >/dev/null
-	(cd "$1" && mcopy -s -m -i "$img@@1M" ./* ::/)
+	rm -f "$img" || return 1
+	truncate -s "${mb}M" "$img" || return 1
+	echo '2048,,c' | sfdisk -q "$img" >/dev/null || return 1
+	mkfs.vfat -F 32 -n C5STICK --offset 2048 "$img" $((mb * 1024 - 1024)) >/dev/null || return 1
+	(cd "$1" && mcopy -s -m -i "$img@@1M" ./* ::/) || return 1
 }
 stick_cat() { mtype -i "$1@@1M" "::$2" 2>/dev/null; }
 
