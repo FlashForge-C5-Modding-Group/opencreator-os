@@ -194,6 +194,9 @@ scenario_S2() {
 
 	local st=$RUN/s2-openwrt.steps
 	steps_openwrt "$st" <<'EOF'
+# Health is published before c5-booted configures Wi-Fi. Its final swap
+# creation completes before these probes mutate synthetic radio sections.
+run 300 swap i=0; until grep -q '^/data/swapfile[[:space:]]' /proc/swaps; do i=$((i+1)); [ $i -lt 300 ] || exit 1; sleep 1; done; cat /proc/swaps; ls -l /data/swapfile; cat /proc/sys/vm/swappiness
 run 30 wificonf cat /etc/c5/wifi.conf
 # No radio is emulated: provide a device section and exercise the real UCI
 # writer, then remove the synthetic Wi-Fi configuration before normal probes.
@@ -205,7 +208,6 @@ run 30 logs ls /data/opencreator-os/logs/
 run 30 overlay mount | grep -E ' on /overlay | on / '
 run 30 deadline ps w | grep '[c]5_test_deadline'
 run 300 hook i=0; until [ -f /data/opencreator-os/last-test.seen ]; do i=$((i+1)); [ $i -lt 300 ] || exit 1; sleep 1; done; cat /data/opencreator-os/last-test.seen; logread | grep -E 'c5-usb-hook|test: '
-run 300 swap i=0; until grep -q '^/data/swapfile[[:space:]]' /proc/swaps; do i=$((i+1)); [ $i -lt 300 ] || exit 1; sleep 1; done; cat /proc/swaps; ls -l /data/swapfile; cat /proc/sys/vm/swappiness
 # slirp with restrict=on offers no DNS server: give lan one, as Wi-Fi's DHCP
 # does on the printer after ntpd started, and expect the jailed ntpd to see it
 run 150 ntpdns uci set network.lan.dns=10.0.2.3 && uci commit network && ifup lan; i=0; until p=; for p in $(pidof ntpd); do [ "$(readlink /proc/$p/ns/mnt)" != "$(readlink /proc/self/ns/mnt)" ] && grep -q '^nameserver 10\.0\.2\.3' /proc/$p/root/etc/resolv.conf 2>/dev/null && break; p=; done; [ -n "$p" ]; do i=$((i+1)); [ $i -lt 120 ] || exit 1; sleep 1; done; grep nameserver /proc/$p/root/etc/resolv.conf; uci delete network.lan.dns; uci commit network
@@ -794,7 +796,7 @@ scenario_S12() {
 	check "menu shown" log_has s12-stock '^QEMU-UI MENU main '
 	check "backup prompt (no delay)" log_has s12-stock '^QEMU-UI CONFIRM backup 0 '
 	check "backup ran" log_has s12-stock '^QEMU-UI INFO backup-run '
-	check "c5os prompt with a 5 s delay" log_has s12-stock '^QEMU-UI CONFIRM c5os 5 Create a 384 MB partition'
+	check "c5os prompt with a 5 s delay" log_has s12-stock '^QEMU-UI CONFIRM c5os 5 Create a 416 MB partition'
 	check "outcome: chainload into slot 1" is_eq "$(boot_outcome s12-stock)" "chainload:$OWRT_ROOT"
 
 	rm -rf "$bk"
@@ -824,7 +826,7 @@ scenario_S12() {
 	rm -rf "$bk"
 
 	check "GPT: p7 userdata shrunk, p8 c5os" is_eq "$(gpt_layout "$DISK" | sed -n '7,8p' | tr '\n' ';')" \
-		"7 2543616 3166207 userdata;8 3166208 3952639 c5os;"
+		"7 2543616 3100671 userdata;8 3100672 3952639 c5os;"
 	check "GPT: p1-p6 unchanged" is_eq "$(gpt_layout "$DISK" | sed -n '1,6p')" "$(gpt_layout "$before" | sed -n '1,6p')"
 	check "GPT verifies clean (backup header present)" bash -c "sgdisk -v '$DISK' | grep -q 'No problems found'"
 	check "GPT header: alternate LBA = last sector" is_eq "$(gpt_header_field "$DISK" 32)" $((DISK_SECTORS - 1))
@@ -836,7 +838,7 @@ scenario_S12() {
 	check "p3-p5 unchanged" is_eq "$(img_part_sum "$DISK" 3 $((PSIZE[3] * 512)))$(img_part_sum "$DISK" 4 $((PSIZE[4] * 512)))$(img_part_sum "$DISK" 5 $((PSIZE[5] * 512)))" \
 		"$(img_part_sum "$before" 3 $((PSIZE[3] * 512)))$(img_part_sum "$before" 4 $((PSIZE[4] * 512)))$(img_part_sum "$before" 5 $((PSIZE[5] * 512)))"
 	check "userdata keeps its files" is_eq "$(data_cat "$DISK" /qemu-keep.txt)" "keep me"
-	check "userdata file system grown to the new p7" bash -c "dumpe2fs -h '$(userdata_spec "$DISK")' 2>/dev/null | grep -qE '^Block count: +77824$'"
+	check "userdata file system grown to the new p7" bash -c "dumpe2fs -h '$(userdata_spec "$DISK")' 2>/dev/null | grep -qE '^Block count: +69632$'"
 	check "c5os is ext4 labelled c5os" bash -c "dumpe2fs -h '$(c5os_spec "$DISK")' 2>/dev/null | grep -qE '^Filesystem volume name: +c5os$'"
 	check "stock copy saved to c5os" c5os_has "$DISK" /opencreator-os/stock/SHA256SUMS
 	check "c5os stores hook model" is_eq "$(c5os_cat "$DISK" /opencreator-os/model)" "Creator5Pro 0029"

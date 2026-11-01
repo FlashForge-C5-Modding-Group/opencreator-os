@@ -13,8 +13,8 @@
 # a pending reboot; otherwise /qemu-stock-finish powers off.
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
 # The QEMU kernel is mainline 6.6; the stock installer and restore stick
-# read this documented release override. The 2 GiB test eMMC uses 384 MiB c5os.
-export C5_UNAME_R=5.10.186+ C5_C5OS_MIB=384
+# read this documented release override. The 2 GiB test eMMC uses 416 MiB c5os.
+export C5_UNAME_R=5.10.186+ C5_C5OS_MIB=416
 
 echo "QEMU-STOCK-INIT root=$(sed -n 's/.*root=\([^ ]*\).*/\1/p' /proc/cmdline)"
 /etc/init.d/S08mdev start

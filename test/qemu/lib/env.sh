@@ -58,12 +58,12 @@ VMLINUX=$QWORK/vmlinux-$KVER-$(cat "$QDIR/kernel/malta.config" "$QDIR/kernel/bui
 # GPT_QUIRK_LAST, far below the disk end, and there is no backup GPT.
 DISK_SECTORS=$((2 * 1024 * 1024 * 2))
 GPT_QUIRK_LAST=3952639
-# c5os size the stock-side installer uses in the tests (C5_C5OS_MIB)
-QEMU_C5OS_MIB=384
+# c5os fits saved stock, chainload and the product's 256 + 64 MiB swap rule.
+QEMU_C5OS_MIB=416
 # Partition layout after the installer's repartition: p7 shrunk, p8 = c5os
 # ending at GPT_QUIRK_LAST, 1 MiB aligned (the backend's formula).
-declare -A PSTART=([1]=2048 [2]=18432 [3]=223232 [4]=239616 [5]=444416 [6]=446464 [7]=2543616 [8]=3166208)
-declare -A PSIZE=([1]=16384 [2]=204800 [3]=16384 [4]=204800 [5]=2048 [6]=2097152 [7]=622592 [8]=786432)
+declare -A PSTART=([1]=2048 [2]=18432 [3]=223232 [4]=239616 [5]=444416 [6]=446464 [7]=2543616 [8]=3100672)
+declare -A PSIZE=([1]=16384 [2]=204800 [3]=16384 [4]=204800 [5]=2048 [6]=2097152 [7]=557056 [8]=851968)
 declare -A PNAME=([1]=kernel [2]=rootfs [3]=kernel2 [4]=rootfs2 [5]=ota [6]=usershare [7]=userdata [8]=c5os)
 
 pick_cross_compile() {
