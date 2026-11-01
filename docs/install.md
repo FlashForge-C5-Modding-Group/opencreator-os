@@ -32,6 +32,11 @@ Everything runs from a FAT32 USB stick, inserted with the printer off.
 >   **OpenWrt test failed** and the reason; stock is unchanged. Tap
 >   **Try again** or **Boot to stock**.
 > - Logs: `opencreator-os-install.log` and `os-installer.log` on the stick.
+> - The installer checksums the original eMMC stream while copying it to
+>   FAT32-sized chunks, avoiding a separate source checksum pass. It still
+>   syncs, drops cached data and independently reads the USB copy back to
+>   verify its exact size and whole-partition SHA-256 (or MD5 fallback).
+>   The backup and restore format is unchanged.
 
 ## Log in
 

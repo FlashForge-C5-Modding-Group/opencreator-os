@@ -623,19 +623,80 @@ disk-tail $C5_DISK $TAIL_START $((DISK_SECTORS - TAIL_START))"
 	BK_NEED_MIB=$((BK_TOTAL_MIB + 2))
 }
 
-# disk_range SKIP SECTORS: those sectors of C5_DISK on stdout
-disk_range() {
-	if [ $(($1 % 2048)) = 0 ] && [ $(($2 % 2048)) = 0 ]; then
-		dd if="$C5_DISK" bs=1M skip=$(($1 / 2048)) count=$(($2 / 2048)) 2>/dev/null
-	else
-		dd if="$C5_DISK" bs=512 skip="$1" count="$2" 2>/dev/null
-	fi
-}
+# backup_copy NAME DEV SKIP SECTORS: hash the original bytes as they are
+# copied, keeping one checksum stream open across the FAT32-sized chunks.
+# Two FIFOs let us wait for dd and the checksum separately (no pipefail in
+# stock sh). The subshell owns all temporary files, descriptors and children.
+backup_copy() (
+	bc_tmp=$(mktemp -d "${TMPDIR:-/tmp}/c5-backup.XXXXXX") || exit 1
+	bc_dd= bc_hash=
+	trap 'exec 3>&-; for bc_pid in $bc_dd $bc_hash; do kill "$bc_pid" 2>/dev/null; done
+		for bc_pid in $bc_dd $bc_hash; do wait "$bc_pid" 2>/dev/null; done
+		rm -rf "$bc_tmp"' 0
+	trap 'exit 1' 1 2 15
+	mkfifo "$bc_tmp/source" "$bc_tmp/hash" || exit 1
+	"$SUM" < "$bc_tmp/hash" > "$bc_tmp/sum" &
+	bc_hash=$!
+	exec 3> "$bc_tmp/hash" || exit 1
+	bc_i=0 bc_off=0
+	while [ "$bc_off" -lt "$4" ]; do
+		bc_len=$(($4 - bc_off))
+		[ "$bc_len" -le $((BK_CHUNK_MIB * 2048)) ] || bc_len=$((BK_CHUNK_MIB * 2048))
+		if [ "$1" = first-mib ]; then
+			bc_rec=first-mib.bin bc_file=$BK/first-mib.bin
+		else
+			bc_rec=$1.img bc_file=$BK/$1.img.$(printf '%03d' "$bc_i")
+		fi
+		bc_skip=$(($3 + bc_off))
+		if [ $((bc_skip % 2048)) = 0 ] && [ $((bc_len % 2048)) = 0 ]; then
+			dd if="$2" bs=1M skip=$((bc_skip / 2048)) count=$((bc_len / 2048)) > "$bc_tmp/source" 2>/dev/null &
+		else
+			dd if="$2" bs=512 skip="$bc_skip" count="$bc_len" > "$bc_tmp/source" 2>/dev/null &
+		fi
+		bc_dd=$!
+		# tee sees source bytes, not a reread of the possibly faulty stick.
+		tee "$bc_file" < "$bc_tmp/source" >&3 || exit 1
+		wait "$bc_dd" || exit 1
+		bc_dd=
+		bk_done=$((bk_done + (bc_len + 2047) / 2048))
+		ui_progress "$bk_done" "$BK_TOTAL_MIB"
+		bc_off=$((bc_off + bc_len))
+		bc_i=$((bc_i + 1))
+	done
+	exec 3>&-
+	wait "$bc_hash" || exit 1
+	bc_hash=
+	read -r bc_sum bc_rest < "$bc_tmp/sum" || exit 1
+	[ -n "$bc_sum" ] || exit 1
+	printf '%s  %s\n' "$bc_sum" "$bc_rec" >> "$BK/$SUMS" || exit 1
+)
+
+# Independent USB readback, with both the reader and checksum exit statuses
+# checked. A successful hash alone must not hide a cat read error.
+backup_readback() (
+	br_tmp=$(mktemp -d "${TMPDIR:-/tmp}/c5-backup.XXXXXX") || exit 1
+	br_cat=
+	trap 'if [ -n "$br_cat" ]; then kill "$br_cat" 2>/dev/null; wait "$br_cat" 2>/dev/null; fi
+		rm -rf "$br_tmp"' 0
+	trap 'exit 1' 1 2 15
+	mkfifo "$br_tmp/source" || exit 1
+	cat "$@" > "$br_tmp/source" &
+	br_cat=$!
+	"$SUM" < "$br_tmp/source" > "$br_tmp/sum" || exit 1
+	wait "$br_cat" || exit 1
+	br_cat=
+	read -r br_sum br_rest < "$br_tmp/sum" || exit 1
+	[ -n "$br_sum" ] || exit 1
+	printf '%s\n' "$br_sum"
+)
 
 backup_emmc() {
-	if [ -f "$BK/VERIFIED" ] && [ -f "$BK/$SUMS" ] && [ "$(cat "$BK/VERIFIED")" = "$(file_sum "$BK/$SUMS")" ]; then
-		log "backup: verified backup already on the stick ($BK_DIR); not repeating it"
-		return 0
+	if [ -f "$BK/VERIFIED" ] && [ -f "$BK/$SUMS" ]; then
+		if bk_verified=$(cat "$BK/VERIFIED") && bk_manifest=$(backup_readback "$BK/$SUMS") &&
+			[ "$bk_verified" = "$bk_manifest" ]; then
+			log "backup: verified backup already on the stick ($BK_DIR); not repeating it"
+			return 0
+		fi
 	fi
 	rm -rf "$BK"
 	mkdir -p "$BK" || fail "backup: cannot create $BK"
@@ -645,45 +706,18 @@ backup_emmc() {
 		rmdir "$BK" 2>/dev/null
 		ui_block backup-space "Not enough space on the USB stick\nThe backup needs ${BK_NEED_MIB} MB free, the stick has $bk_free MB.\nTap Boot to stock, then use a larger stick, or reboot with this one and choose Skip backup." "Boot to stock"
 	fi
-	# userdata must not change between its checksum and its copy
+	# Keep userdata stable throughout the copy and independent verification.
 	NO_DATA_LOG=1
 	ui_info backup-run "Backing up the eMMC to the stick\nDo not remove the stick or power off."
-	: > "$BK/$SUMS"
+	: > "$BK/$SUMS" || fail "backup: cannot create $SUMS"
 	bk_done=0
 	ui_progress 0 "$BK_TOTAL_MIB"
 	while read -r bk_name bk_dev bk_skip bk_n; do
 		bk_mib=$(((bk_n + 2047) / 2048))
 		log "backup: $bk_name ($bk_dev, $bk_mib MiB)"
-		if [ "$bk_name" = first-mib ]; then
-			bk_sum=$(disk_range 0 2048 | "$SUM" | cut -d' ' -f1)
-			dd if="$C5_DISK" of="$BK/first-mib.bin" bs=1M count=1 2>/dev/null || fail "backup: dd of first-mib failed"
-			echo "$bk_sum  first-mib.bin" >> "$BK/$SUMS"
-			bk_done=$((bk_done + bk_mib))
-			ui_progress "$bk_done" "$BK_TOTAL_MIB"
-			continue
-		fi
-		if [ "$bk_dev" = "$C5_DISK" ]; then
-			bk_sum=$(disk_range "$bk_skip" "$bk_n" | "$SUM" | cut -d' ' -f1)
-		else
-			bk_sum=$("$SUM" < "$bk_dev" | cut -d' ' -f1)
-		fi
-		bk_i=0
-		while [ $((bk_i * BK_CHUNK_MIB * 2048)) -lt "$bk_n" ]; do
-			bk_c=$(printf '%03d' "$bk_i")
-			bk_off=$((bk_i * BK_CHUNK_MIB * 2048))
-			bk_len=$((bk_n - bk_off))
-			[ "$bk_len" -le $((BK_CHUNK_MIB * 2048)) ] || bk_len=$((BK_CHUNK_MIB * 2048))
-			if [ "$bk_dev" = "$C5_DISK" ]; then
-				disk_range $((bk_skip + bk_off)) "$bk_len" > "$BK/$bk_name.img.$bk_c" || fail "backup: dd of $bk_name chunk $bk_c failed"
-			else
-				dd if="$bk_dev" of="$BK/$bk_name.img.$bk_c" bs=1M skip=$((bk_i * BK_CHUNK_MIB)) count="$BK_CHUNK_MIB" 2>/dev/null ||
-					fail "backup: dd of $bk_name chunk $bk_c failed"
-			fi
-			bk_done=$((bk_done + (bk_len + 2047) / 2048))
-			ui_progress "$bk_done" "$BK_TOTAL_MIB"
-			bk_i=$((bk_i + 1))
-		done
-		echo "$bk_sum  $bk_name.img" >> "$BK/$SUMS"
+		backup_copy "$bk_name" "$bk_dev" "$bk_skip" "$bk_n" ||
+			fail "backup: copy or checksum of $bk_name failed"
+		bk_done=$((bk_done + bk_mib))
 	done <<EOF
 $BK_LIST
 EOF
@@ -713,7 +747,7 @@ EOF
 		bk_bytes=0
 		for bk_f in $bk_files; do bk_bytes=$((bk_bytes + $(file_bytes "$bk_f"))); done
 		# shellcheck disable=SC2086
-		bk_got=$(cat $bk_files 2>/dev/null | "$SUM" | cut -d' ' -f1)
+		bk_got=$(backup_readback $bk_files) || fail "backup: readback of $bk_name failed"
 		if [ "$bk_bytes" != $((bk_n * 512)) ] || [ "$bk_got" != "$(sums_get "$BK/$SUMS" "$bk_rec")" ]; then
 			fail "backup: verification of $bk_name failed (stick unreliable)"
 		fi
@@ -722,7 +756,10 @@ EOF
 	done <<EOF
 $BK_LIST
 EOF
-	file_sum "$BK/$SUMS" > "$BK/VERIFIED"
+	backup_readback "$BK/$SUMS" > "$BK/VERIFIED" || {
+		rm -f "$BK/VERIFIED"
+		fail "backup: cannot checksum $SUMS"
+	}
 	sync
 	NO_DATA_LOG=0
 	log "backup: verified; $BK_TOTAL_MIB MiB in $BK_DIR"
