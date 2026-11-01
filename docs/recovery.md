@@ -582,7 +582,7 @@ is installed.** Stock's OTA scripts write the unselected slot and flip the
 flag (**Observed**). Updating from stock overwrites OpenWrt and boots the
 new stock, leaving the old stock in the other slot. The printer still
 boots, but OpenWrt is gone and slot roles are swapped.
-Reinstall opencreator-os from the new stock.
+Reinstall opencreator-os from the new stock; see `stock-updates.md`.
 
 ### 10. `c5os` or `userdata` damaged
 

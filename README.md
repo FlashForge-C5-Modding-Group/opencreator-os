@@ -11,6 +11,7 @@ watchdog reset and the boot-counter fallback. System tests:
 
 - `docs/install.md`: backup, installation, test boot and return to stock
 - `docs/recovery.md`: safety mechanisms and failure cases
+- `docs/stock-updates.md`: running a FlashForge firmware update with OpenWrt installed
 - `docs/build.md`: building the image and install stick
 - `docs/image.md`: kernel, packages and base files
 - `docs/printer-facts.md`: observed printer behaviour
