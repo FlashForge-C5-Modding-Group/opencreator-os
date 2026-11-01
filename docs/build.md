@@ -43,13 +43,24 @@ Its SDK is on the same FTP server:
 
 ## 5. Build the image
 
+If the 6.6 SDK is already downloaded, set its full Linux/WSL path:
+
+```sh
+export INGENIC_SDK_TARBALL="/mnt/d/ingenic/X2600/06_kernel6.6_x2600-sdk_v1.0-20250221/ingenic-linux-kernel6.6-x2600-v1.0-20250221.tar.bz2"
+```
+
+This overrides `INGENIC_SDK_DIR`; a missing file fails without downloading.
+Otherwise, the SDK is read from `INGENIC_SDK_DIR` (default in
+`kernel/prepare.sh`) or downloaded there from Ingenic's FTP. Before extraction,
+the archive must match the pinned MD5 in `kernel/SOURCE.md`. An existing
+extracted kernel tree is reused without rechecking or unpacking the archive.
+
 ```sh
 export OUT=~/opencreator-os-builds
 ./build.sh
 ```
 
-The first run downloads the Ingenic 6.6 SDK (`kernel/SOURCE.md`) and takes
-hours. Output: `$OUT/<version>/`, where `<version>` is
+The first build takes hours. Output: `$OUT/<version>/`, where `<version>` is
 `git describe --always --dirty --tags`.
 
 ## 6. Build the touchscreen app
