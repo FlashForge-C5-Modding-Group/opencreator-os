@@ -1,28 +1,26 @@
 # QEMU system tests
 
-`test/qemu/run.sh [SCENARIO...]` boots the real OpenWrt `root.squashfs` and
-the stock 2.0.0 userspace in QEMU on an emulated eMMC with the printer's GPT,
-emulates the SPL's slot choice, and runs install, boot, fallback, upgrade and
-restore scenarios end to end. It prints `PASS` / `FAIL` / `SKIP` per scenario
-and exits 1 if any scenario failed. Nothing touches the printer and nothing
-needs root.
+`test/qemu/run.sh [SCENARIO...]` tests install, boot, fallback, upgrade and
+restore using OpenWrt `root.squashfs`, stock 2.0.0 userspace, an emulated
+eMMC with the printer's GPT, and emulated SPL slot selection.
+It prints `PASS` / `FAIL` / `SKIP` per scenario and exits 1 on failure.
+It does not access the printer or require root.
 
 ```sh
-# WSL, from the repo root; first run downloads and builds the QEMU kernel
+# from the repo root; first run downloads and builds the QEMU kernel
 test/qemu/run.sh            # all scenarios, 8 at a time on 16 CPUs (about 14 min)
 test/qemu/run.sh -j 1       # one after the other (about 50 min)
 test/qemu/run.sh S1 S8      # stock-side only, a few minutes
 ```
 
-`-j N` (or `QEMU_JOBS=N`) runs N scenarios at once, each with its own QEMU
-(one host CPU each under TCG) and run directory; the default is half the
-host's CPUs. The scenarios that reuse S2's committed image
-(`prepare_committed`) start once S2 has finished; without S2 in the run, the
-first of them builds the image and the others wait for it. The rest start
-longest first, by the durations of their last passing runs
-(`$QWORK/scenario-times`). Terminal lines carry the scenario name; each
-`scenario.log` has only its own. S12 (the whole-eMMC backup) takes 12 to 14
-minutes on its own and bounds a parallel run; the rest finish in about 10.
+`-j N` or `QEMU_JOBS=N` runs N scenarios concurrently, defaulting to half
+the host CPUs. Each has its own run directory and QEMU instance using one
+host CPU under TCG. Scenarios using `prepare_committed` wait for S2's image;
+without S2, the first builds it and the others wait. Remaining scenarios
+start longest first, using the last passing durations in
+`$QWORK/scenario-times`. Terminal output is prefixed by scenario;
+`scenario.log` contains only that scenario. S12's whole-eMMC backup takes
+12–14 minutes; the rest finish in about 10 minutes.
 
 ## Prerequisites
 
@@ -34,111 +32,100 @@ minutes on its own and bounds a parallel run; the rest finish in about 10.
 - A MIPS cross compiler for the QEMU kernel: the OpenWrt toolchain from
   `./build.sh` or `~/ing/mips-xburst2-linux-toolchain-r6.0.0` (or set
   `CROSS_COMPILE`).
-- OpenWrt artifacts: the newest `/mnt/f/creator5-dev/opencreator-os-builds/*/`
-  that holds `*x2600-generic-flashforge_creator5pro*-root.squashfs` with its
-  `-kernel.uimage` and `-sysupgrade.tar` (override with `OWRT_BIN=DIR`). S5
-  also needs the host `fwtool` from the OpenWrt tree
-  (`$OWRT_DIR/staging_dir/host/bin/fwtool`).
+- OpenWrt artifacts: `*x2600-generic-flashforge_creator5pro*-root.squashfs`
+  with matching `-kernel.uimage` and `-sysupgrade.tar`. Set `OWRT_BIN=DIR`
+  to choose a directory. Default: the newest matching build under
+  `$OWRT_BUILDS` (default `/mnt/f/creator5-dev/opencreator-os-builds`), falling back
+  to `$OWRT_DIR/bin/targets/x2600/generic`.
+  S5 also needs `$OWRT_DIR/staging_dir/host/bin/fwtool`.
 - `chainload/out/chainload.ko` (only copied around, never loaded).
 - The stock firmware archive checkout at
-  `/mnt/f/creator5-dev/creator-5-pro-firmware-archive` (`STOCK_ARCHIVE`).
+  `/mnt/f/creator5-dev/creator-5-pro-firmware-archive` by default (`STOCK_ARCHIVE`).
 
-Fixtures and run directories live under `~/build/opencreator-os/qemu/`
-(`QWORK`), outside the repo: the kernel tree and `vmlinux`, the stock root
-squashfs, the 2 GiB base eMMC image, `scenario-times`, and
-`runs/<timestamp>/<scenario>/` with every boot's serial log (`*.log`), command
-results (`*.res`), step files and `scenario.log`. Images of passed scenarios
-are deleted; failed ones are kept. Only the last `KEEP_RUNS` (3) run
-directories are kept. Two runs at the same time need different `QWORK`s.
+`QWORK` defaults to `~/build/opencreator-os/qemu/` and holds the kernel
+tree, `vmlinux`, stock root squashfs, 2 GiB base eMMC image,
+`scenario-times`, and `runs/<timestamp>/<scenario>/`. Each run keeps serial
+logs (`*.log`), command results (`*.res`), step files and `scenario.log`.
+Passed images are deleted; failed images are kept. Only the last
+`KEEP_RUNS` run directories are kept, default 3. Concurrent runs require
+different `QWORK`s.
 
 ## What is real and what is emulated
 
 | Piece | In the tests |
 |---|---|
-| OpenWrt userland, base-files (`slot.sh`, preinit hooks, `c5-booted`, `c5-usb-hook`, fixed fstab, `platform.sh`, sysupgrade, fstools overlay, uci-defaults) | real: the build's `root.squashfs`. By default the working tree's `feed/x2600/base-files` are laid over it, including removed files and updated init links (`QEMU_REFRESH_ROOTFS=0` tests the artifact unchanged). |
-| Stock userland: busybox 1.31.1, glibc, `fdisk`, `e2fsck`, `mount_mmc_ext4.sh`, `S08mdev`/`S09mount_mmc_prog`/`S21mount_mmc_ext4`, the USB hook part of `app_startup.sh` | real, from the archive (rebuilt as a squashfs; git loses empty directories, so the skeleton mount points are recreated) |
-| Installer (`runFirmwareExe.sh`, `install.sh`, `lib.sh`, `slot.sh` from the image's base-files, the stick's static `bin/sfdisk` and `bin/partx`), restore stick, `tools/make-install-stick.sh`, `tools/make-restore-stick.sh` | real, run by the stock or OpenWrt USB hook from a FAT32 stick image; both hooks pass `Creator5Pro 0029` |
-| os-installer app | `fixtures/fake-ui.sh` answers the installer's screen protocol (`--ui`) from `qemu/ui.conf` on the stick (`menu=N` for every MENU, `menu_<id>=N` for MENU `<id>` before that, `confirm_<id>=ok\|early\|cancel`, `hold=<id>`: wait for `/tmp/qemu-ui-release` before answering, after creating `/tmp/qemu-ui-held`), echoes every request to the console as `QEMU-UI ...`, taps a `BLOCK` button (`QEMU-UI-TAP <button>`, exit 1 like the app); `fixtures/qemu-ui-hook.sh` replaces the stick's `runFirmwareExe.sh` on UI sticks (`make_ui_payload`) and, like the real hook, exits 1 when the "app" does. Like the app, it ends at once when the installer exits 0 and otherwise prints `QEMU-UI-CONTINUE <status>` (where the app shows Continue, tapped at once). Sticks without it run the real hook headless |
-| eMMC | `sd-card` on `sdhci-pci`, 2 GiB (QEMU needs a power-of-two size): names and starts of p1-p7 and sizes of p1-p6 exactly as on the printer (8-entry GPT). Two images: the stock layout (`new_stock_disk`; p7 `userdata` ends at the primary header's last usable LBA 3,952,639, which also is its alternate LBA, no backup GPT, as on the printer) and the layout the installer leaves (`new_disk`; p7 shrunk to 304 MiB, p8 `c5os` 384 MiB, backup GPT at the disk end). The installer gets `C5_C5OS_MIB=384` instead of the printer's 4096. QEMU's SD emulation moves one 512-byte block per synchronous image read or write, about 8 MB/s with `aio=io_uring` (4 MB/s with the default thread pool); this, not the guest CPU, bounds the whole-eMMC backup in S12 |
-| SPL | `spl_root` in `lib/harness.sh`: `ota:kernel2` in the first 11 bytes of `ota` -> `root=/dev/mmcblk0p4`, else `/dev/mmcblk0p2`; the command line is the SPL's fixed one without the X2600 memory map (`mem=`, `rmem=`, `rtos_size=`, `lpj=`), behind the product kernel's built-in prefix (`CONFIG_CMDLINE` from `kernel/creator5pro.config`: `ieee754=relaxed` and the screen console `console=ttyS0,115200n8 console=tty0 fbcon=rotate:3 vt.global_cursor_default=0`; the QEMU kernel has a VT, the runs have no display, serial stays `/dev/console`). Stock boots get the prefix too, so a chainload line (built from stock's `/proc/cmdline`) carries it once, as the chainloaded X2600 kernel would add it |
-| Kernel | mainline Linux 6.6.58 for QEMU malta (`kernel/malta.config`), everything built in except usbnet and cdc_ether: `kernel/build.sh` builds them as modules and the harness puts them into the OpenWrt root's `/lib/modules/6.6.58`, where the image's own kmod-usb-net autoload entries load them. Neither the X2600 kernel nor the stock 5.10 kernel run in QEMU. Its DT's first root `compatible` is `flashforge,creator5pro` (as in `kernel/dts/creator5pro.dts`), so OpenWrt's `board_name`, `board.d` (lan = eth0 DHCP) and fwtool's `supported_devices` check behave as on the printer |
-| Network | `-nic user,model=pcnet,restrict=on`: eth0 (in OpenWrt's `br-lan`) gets 10.0.2.15 by DHCP. S16 replaces it with a USB adapter (`usb-net` on xHCI, CDC Ethernet, `QEMU_USB_NIC=1`). Boot health requires reaching `c5-booted` with c5os mounted, not a network connection. Wi-Fi credentials come from usershare's `wpa_supplicant.conf` through the installer and c5os |
-| chainload | `fixtures/fake-c5-chainload.sh` replaces `chainload/c5-chainload.sh` on test sticks (checksums re-made). It embeds the repo's `c5-chainload.sh` and runs its `args` on stock to compute the command line (`root=`, `c5.nocommit=1` when the staged kernel is not the slot's own, ...; it also prints `watchdog=`); `go`/`go-now` print `QEMU-CHAINLOAD root=<dev> cmdline=<...>` and power off; the harness boots OpenWrt with exactly that command line and the eMMC as left - what a RAM chainload does. Booting stock instead after the fake jump stands for a watchdog reset after a hung test kernel |
-| Stock init | real stock busybox `init` with `fixtures/stock/inittab`: stock's sysinit lines, then synchronous `/qemu-stock-init` (mdev, stock mount scripts, the hook) instead of rcS. A successful hook stalls inside sysinit; only if it returns can init process a pending plain reboot or run `/qemu-stock-finish` to power off |
-| A user on SSH (stock) | `/usr/data/qemu-action.sh`, written into userdata by the harness (debugfs) and run once by `/qemu-stock-init` only after the hook returns |
-| A user on the console (OpenWrt) | `lib/qemu-run.py` drives the serial console: OpenWrt's `askconsole` shell, switched to a quiet command channel (a `read` loop piped into `sh`) |
+| OpenWrt userland and base-files | Build's `root.squashfs`: `slot.sh`, preinit, `c5-booted`, `c5-usb-hook`, fixed fstab, `platform.sh`, sysupgrade, fstools overlay and uci-defaults. Working-tree `feed/x2600/base-files` is applied by default, including deletions and init-link updates. `QEMU_REFRESH_ROOTFS=0` tests the unchanged artifact. |
+| Stock userland | Archived busybox 1.31.1, glibc, `fdisk`, `e2fsck`, `mount_mmc_ext4.sh`, `S08mdev`/`S09mount_mmc_prog`/`S21mount_mmc_ext4` and the USB hook in `app_startup.sh`, rebuilt as squashfs with missing empty mount directories recreated. |
+| Installer and restore stick | Real `runFirmwareExe.sh`, `install.sh`, `lib.sh`, image base-files `slot.sh`, static `bin/sfdisk` and `bin/partx`, `tools/make-install-stick.sh` and `tools/make-restore-stick.sh`. Stock and OpenWrt hooks run them from FAT32 stick images with model `Creator5Pro 0029`. |
+| os-installer app | `fixtures/fake-ui.sh` implements `--ui` using stick file `qemu/ui.conf`: `menu=N` sets every MENU response, overridden by `menu_<id>=N`; `confirm_<id>=ok\|early\|cancel`; `hold=<id>` creates `/tmp/qemu-ui-held` and waits for `/tmp/qemu-ui-release`. Requests print as `QEMU-UI ...`; BLOCK taps print `QEMU-UI-TAP <button>` and exit 1. UI sticks use `fixtures/qemu-ui-hook.sh` via `make_ui_payload`, replacing `runFirmwareExe.sh`: app exit 1 returns 1; installer exit 0 ends immediately; other installer exits print `QEMU-UI-CONTINUE <status>` and simulate tapping Continue. Other sticks use the real headless hook. |
+| eMMC | 2 GiB `sd-card` on `sdhci-pci`; size must be a power of two. The 8-entry GPT matches printer p1–p7 names/starts and p1–p6 sizes. `new_stock_disk`: p7 `userdata` ends at LBA 3,952,639, also the primary header's last usable and alternate LBA, with no backup GPT. `new_disk`: p7 = 304 MiB, p8 `c5os` = 384 MiB, backup GPT at disk end. `C5_C5OS_MIB=384` replaces the printer's 4096. Synchronous 512-byte SD transfers limit S12 backup speed to about 8 MB/s with `aio=io_uring`, 4 MB/s with threads. |
+| SPL | `spl_root` in `lib/harness.sh` selects `root=/dev/mmcblk0p4` when `ota` starts with the 11 bytes `ota:kernel2`, otherwise `/dev/mmcblk0p2`. The SPL command line omits X2600 `mem=`, `rmem=`, `rtos_size=` and `lpj=`. Both stock and OpenWrt boots prepend `CONFIG_CMDLINE` from `kernel/creator5pro.config`: `ieee754=relaxed console=ttyS0,115200n8 console=tty0 fbcon=rotate:3 vt.global_cursor_default=0`. Chainload carries this prefix once. QEMU has a VT but no display; serial remains `/dev/console`. |
+| Kernel | Mainline Linux 6.6.58 for Malta, configured by `kernel/malta.config`. Everything is built in except `usbnet` and `cdc_ether`: `kernel/build.sh` builds modules and the harness installs them in `/lib/modules/6.6.58` for the image's kmod-usb-net autoload entries. Neither printer kernel runs. DT root `compatible` starts with `flashforge,creator5pro`, matching `kernel/dts/creator5pro.dts` for `board_name`, `board.d` eth0 DHCP and fwtool `supported_devices` checks. |
+| Network | `-nic user,model=pcnet,restrict=on`; eth0 in `br-lan` gets 10.0.2.15 by DHCP. S16 substitutes CDC Ethernet `usb-net` on xHCI with `QEMU_USB_NIC=1`. Boot health requires `c5-booted` with c5os mounted, not networking. Wi-Fi credentials pass from usershare's `wpa_supplicant.conf` through the installer and c5os. |
+| chainload | Test sticks substitute `fixtures/fake-c5-chainload.sh` and regenerate checksums. It embeds the real script and runs `args` on stock to compute `root=`, commit eligibility (`c5.nocommit=1` for a non-slot kernel) and `watchdog=`. `go`/`go-now` print `QEMU-CHAINLOAD root=<dev> cmdline=<...>` and power off. The harness boots OpenWrt with that command line and unchanged eMMC state. Booting stock instead simulates a hung-kernel watchdog reset. |
+| Stock init | Real stock busybox `init` with `fixtures/stock/inittab`: stock sysinit lines, then synchronous `/qemu-stock-init` for mdev, mount scripts and the hook instead of rcS. A successful hook stalls sysinit; pending plain reboots and `/qemu-stock-finish` poweroff require it to return. |
+| Stock SSH actions | Harness writes `/usr/data/qemu-action.sh` into userdata with debugfs; `/qemu-stock-init` runs it once after the hook returns. |
+| OpenWrt console actions | `lib/qemu-run.py` drives `askconsole` over serial using a quiet `read` loop piped into `sh`. |
 
-Test-only deviations, all outside the product code:
+Test-only deviations outside product code:
 
-- `C5_UNAME_R=5.10.186+` is exported by `/qemu-stock-init` (the installer and
-  restore stick insist on the stock kernel release; the QEMU kernel is 6.6.58).
-- `qemu_stick=1` on the stock command line makes `/qemu-stock-init` wait up to
-  60 s for the USB stick: QEMU's xHCI + usb-storage enumerate more slowly than
-  stock's 2 s "wait for USB".
-- `C5_C5OS_MIB=384` is exported by `/qemu-stock-init` (the 2 GiB card).
-- S14's healthy UI test boot appends `C5_TEST_DEADLINE=600` to its chainload
-  command line, using the existing `slot.sh` test override. Malta/TCG guest
-  clock and delay-loop calibration vary with parallel host load (`-j 8`),
-  so the printer's 180 s budget can expire before the emulated healthy boot.
-  S14 tests commit/UI ordering, not boot speed; its host-side waits remain
-  bounded. S2 still checks the default 180 s deadline and S15 checks failure
-  with its explicit 10 s deadline. No printer behavior or kernel `lpj` changes.
-- stock's `sleep 100000` after a hook exit 0 prints
-  `QEMU-STOCK-HOOK rc=0 stall` and stays in an endless sleep loop. It does
-  not return from `app_startup.sh` or release sysinit. Stock's real busybox init and reboot
-  command remain in use: a plain reboot is naturally pending while init
-  waits for sysinit, so stock-side reboot paths must actually restart from
-  that state. The fixture never replaces reboot with a test command.
-- QEMU malta kernel: the DT compatible above, and malta's DT shim recognises
-  malta by any compatible entry (`kernel/build.sh` patches both).
-- CPU: QEMU `24Kf` (MIPS32r2 with a 64-bit FPU). The stock userland is
-  NaN2008/FP64 and OpenWrt's is legacy-NaN; `ieee754=relaxed` lets one CPU run
-  both, as the X2600 kernel does for OpenWrt. `P5600` (NaN2008) would be closer
-  but reads corrupt data from every block device under this kernel.
+- `/qemu-stock-init` exports `C5_UNAME_R=5.10.186+` for installer/restore
+  release checks, and `C5_C5OS_MIB=384` for the 2 GiB card.
+- `qemu_stick=1` makes stock init wait up to 60 s for USB instead of 2 s.
+- S14's healthy UI boot uses `C5_TEST_DEADLINE=600` through `slot.sh`'s test
+  override. Malta/TCG clock and delay calibration under parallel load can
+  exceed the printer's 180 s deadline. Host waits remain bounded.
+  S2 checks the default 180 s deadline; S15 uses 10 s for failure.
+  Printer behavior and kernel `lpj` are unchanged.
+- Stock's post-hook `sleep 100000` prints `QEMU-STOCK-HOOK rc=0 stall` and
+  loops forever without returning from `app_startup.sh` or releasing
+  sysinit. Real busybox init/reboot remain in use; a plain reboot stays
+  pending behind the stall.
+- `kernel/build.sh` patches the Malta DT compatible and accepts Malta
+  in any compatible entry.
+- CPU `24Kf` is MIPS32r2 with a 64-bit FPU. `ieee754=relaxed` supports
+  both stock NaN2008/FP64 and OpenWrt legacy-NaN userland.
+  Do not use `P5600`: block-device reads are corrupt under this kernel.
 
 ## Scenarios
 
-Stock boot expectations are bounded to 180 s by default, followed by a
-240 s VM-exit bound; explicit longer waits remain for S12's backup and
-partition work. Both stock step helpers accept the kernel's
-`reboot: Restarting system` marker as well as the normal stock-completion
-and fake-chainload markers. A pending reboot trapped behind the successful
-hook stall therefore times out instead of being mistaken for completion.
-
+Stock boots have a default 180 s expectation timeout and 240 s VM-exit
+timeout; S12 allows longer for backups and partition work. Both stock step
+helpers accept `reboot: Restarting system`, stock-completion and
+fake-chainload markers. A pending reboot blocked by the hook stall times
+out rather than counting as completion.
 
 | | |
 |---|---|
-| S1 | default (headless) install from the stock USB hook: slot 1 written and read back, overlay header cleared, flag untouched, stock saved to `userdata/opencreator-os/stock/`; `wifi.conf`, hook model `Creator5Pro 0029`, and matching `pending-commit` saved on c5os, not userdata; no `good-kernel` yet, so it plans and starts a chainload test boot of slot 1 with the slot's own uImage copied to `userdata/opencreator-os/chainload/`, after writing c5os `last-test` = `started qemu-test`. Then stock boots again (what a watchdog reset after a hung test kernel leaves): the stick's headless run reports `hung before OpenWrt started (watchdog reset)` in both logs, renames `last-test` to `last-test.seen`, does not retry, and stock boots on with the flag on stock |
-| S2 | default install: fake jump to `root=/dev/mmcblk0p2` with the install stick still in; preinit does not count the test boot and arms the 180 s deadline, whose job (started in preinit) still runs after `c5-booted`; overlay created, fixed fstab label mounts c5os (p8) at `/data`, Wi-Fi imported, model-derived hostname `creator5pro`, dropbear up; healthy boot resets tries, commits matching pending install, records `last-test` ok, `good-kernel`, bootlog and c5os logs. The USB hook is deferred at START=19 until `c5-booted`; its detached headless run logs `installed ... (no display)` (stick log and syslog) and marks it seen. Then `c5-swap` creates `/data/swapfile` (mode 600) and `/proc/swaps` lists it. lan then gets a DNS server (`uci` `dns` and `ifup lan`, removed afterwards; the restricted slirp offers none), and the jailed ntpd's `/etc/resolv.conf` lists it (`20-c5-ntp` restarted sysntpd). IPv4 and IPv6 forwarding remain zero after boot and lan `ifup` |
-| S3 | normal SPL boots keep the OpenWrt flag; a third attempt becomes healthy and resets the counter to zero, next boot starts at one; no redundant flag commits; overlay file survives reboot |
-| S4 | three boots killed after preinit each count and retain OpenWrt; fourth preinit selects stock, resets counter, records `last-test` = `failed ... boot counter: 3 boots of slot 1 did not become healthy` and reboots; stock boots, and a headless stick's run reports it (seen). With stock marked invalid the fourth attempt never flips, and a subsequent healthy boot resets tries |
-| S5 | same-kernel sysupgrade takes the known-good direct path (OpenWrt flag retained, no pending commit) and boots the new root directly. "Update / Repair OpenWrt" from the app with the same build (not refused) resets an edited `/etc/config/fstab` to the image's and keeps a user `uci` setting. A changed valid uImage header, installed like on the printer (the stick's hook at boot, the app's "Update / Repair OpenWrt"), takes test-then-commit: stock flag, pending commit on c5os, staged kernel on userdata, stock boot and chainload, preserved hostname and OpenWrt-edited `/etc/c5/wifi.conf` (keep.d), consumed backup and marker. Both app updates end on the "Updating OpenWrt" screen, not FAILED (procd never answers a started upgrade). Garbage is refused without writes; changed-kernel rootfs-write power cut leaves stock bootable |
-| S6 | real OpenWrt USB hook runs the install stick headless with `opencreator-os/ACTION=repair-stock` (CRLF accepted): damaged stock repaired byte-for-byte, flag selects stock, stock boots. Power cut during repair retains OpenWrt and the invalid-stock mark; the same stick completes on the next run and stock boots. `ACTION=swap` selects and boots stock, but is refused when stock is not selectable. With the app (UI stick): while the main menu waits for a tap, `c5-booted` has run, dropbear runs and lan is up; Repair stock asks first (5 s delay); Cancel writes nothing and ends with Continue; ok repairs, shows "Rebooting into stock", reboots into stock and the app ends without Continue |
-| S7 | stock-side restore stick (`tools/make-restore-stick.sh --slot1 --flag-stock`) from a backup taken of the pristine (repartitioned, c5os) image restores slot 1 over OpenWrt, flips the flag, reboots; stock boots from slot 1; the stick does nothing the second time |
-| S8 | corrupted `root.squashfs` on the stick: installer aborts on the checksum, nothing written, flag unchanged, stock boots on |
-| S9 | power cut (QEMU killed) while the installer writes the rootfs: flag still on stock, `install-pending` left on userdata, the next boot is stock and the same stick finishes the install and test-boots slot 1 |
-| S10 | chainload test of a kernel that is not slot 1's own: command line carries `c5.nocommit=1`, OpenWrt boots, preinit logs `test boot (c5.nocommit=1); counter and flag untouched`, `c5-booted` does not commit, flag stays on stock |
-| S12 | full touchscreen flow on stock layout (UI stick, 3 GiB): menu -> whole-eMMC backup (recorded sums checked) -> delayed c5os prompt -> shrink userdata and rewrite GPT, preserving MBR/SPL and p1-p6 -> install -> chainload. Model, hand-written Wi-Fi override and authorized keys live only on c5os and import into `/etc`; OpenWrt mounts c5os by label at `/data`, sees a valid backup GPT and commits. A separate stock-layout run makes only the test stick's `partx` fail, leaving the real GPT write and kernel partition view untouched: the installer records `c5os-rebooted`, reboots from inside sysinit, and the same stick finishes the interrupted c5os setup on the next boot, clears the marker and chainloads |
-| S13 | full userdata blocks before the menu with a "Boot to stock" button; tapping it lets stock boot on. Early/cancelled c5os prompts abort without partition writes. An unknown hook model is rejected in an existing stock boot without submitting any eMMC writes (the whole-device sectors-written counter stays unchanged) |
-| S14 | stock-side Swap to OpenWrt: the stock UI first shows "OpenWrt test failed" / `hung before OpenWrt started (watchdog reset)`, "Try again" goes on to the menu. Swap with an untested kernel recreates `pending-commit`, test-boots the slot's own kernel with the UI stick in: the healthy boot commits, records `last-test` ok, then (after the commit) shows "OpenWrt installed"; Reboot shows "Rebooting into OpenWrt", the app ends without Continue, the VM reboots and it is marked seen; the next SPL boot is OpenWrt and shows the normal OpenWrt menu, no installed screen. Swap to stock finishes by letting stock continue; swap is disabled/refused without an installation. A headless stick that already started OpenWrt (committed image, flag back on stock) does not again and stock boots on; the same build reinstalled from the app skips the test and selects OpenWrt directly (known-good kernel), recording `last-test` started; its "Rebooting into OpenWrt" ends the app without Continue and stock reboots. A subsequent stock-side Swap to OpenWrt with that known-good kernel also selects it directly and reboots without a chainload or Continue |
-| S15 | failed test boots: c5os relabelled so OpenWrt's fstab cannot mount `/data`: `c5-booted` fails the test at once (`reboot -f`), flag on stock, `last-test` failed with the reason, `pending-commit` removed, no stock-invalid mark; counter, stock slot and userdata untouched. The stock UI stick shows "OpenWrt test failed" with the reason, "Boot to stock" skips the menu and stock boots (seen). Then Swap to OpenWrt from the app, and a test boot with `C5_TEST_DEADLINE=10` on the command line fails at the deadline the same way |
-| S16 | USB Ethernet adapter plugged in at boot (QEMU `usb-net`, no PCI NIC; needs the refreshed root): `usbnet` and `cdc_ether` are loaded at boot by the image's autoload entries, the adapter is `eth0` and `br-lan` gets 10.0.2.15 through it; `wpa_supplicant` runs without `hostapd`, and there is no `urngd` |
+| S1 | Headless stock-hook install writes and reads back slot 1, clears the overlay header, preserves the flag, and saves stock in `userdata/opencreator-os/stock/`. `wifi.conf`, model `Creator5Pro 0029` and matching `pending-commit` go to c5os. Without `good-kernel`, it stages slot 1's uImage in `userdata/opencreator-os/chainload/`, records c5os `last-test` = `started qemu-test`, and chainloads. A simulated watchdog reset boots stock; the headless stick logs `hung before OpenWrt started (watchdog reset)` in both logs, renames `last-test` to `last-test.seen`, and continues stock without retry or flag change. |
+| S2 | Install chainloads `root=/dev/mmcblk0p2` with the stick inserted. Preinit leaves the counter unchanged and starts the 180 s deadline, which remains active after `c5-booted`. Overlay is created, fstab mounts c5os p8 by label at `/data`, Wi-Fi imports, hostname is `creator5pro`, and dropbear starts. A healthy boot resets tries, commits matching pending install, records `last-test` ok, `good-kernel`, bootlog and c5os logs. START=19 defers the USB hook until `c5-booted`; its detached headless run logs `installed ... (no display)` to stick/syslog and marks it seen. `c5-swap` creates `/data/swapfile` mode 600 and activates it in `/proc/swaps`. A temporary lan DNS setting plus `ifup lan` reaches jailed ntpd's `/etc/resolv.conf` through `20-c5-ntp` restarting sysntpd; restricted slirp supplies no DNS. IPv4/IPv6 forwarding stay zero after boot and lan `ifup`. |
+| S3 | SPL boots retain the OpenWrt flag. A healthy third attempt resets the counter; the next boot starts at one. No redundant flag commits; overlay files survive reboot. |
+| S4 | Three boots killed after preinit increment the counter and retain OpenWrt. The fourth selects stock, resets the counter, records `last-test` = `failed ... boot counter: 3 boots of slot 1 did not become healthy`, and reboots. The headless stock stick reports and marks it seen. With stock marked invalid, the fourth attempt retains OpenWrt; a healthy boot resets tries. |
+| S5 | Same-kernel sysupgrade boots the new root directly, retaining the OpenWrt flag without pending commit. App "Update / Repair OpenWrt" accepts the same build, restores image `/etc/config/fstab`, and preserves user `uci` settings. A changed valid uImage header takes test-then-commit through the stock hook/app: stock flag, pending commit on c5os, staged kernel on userdata, stock boot and chainload. Hostname and `/etc/c5/wifi.conf` survive through keep.d; backup and marker are consumed. Both app updates stay on "Updating OpenWrt", not FAILED; procd does not answer a started upgrade. Garbage is refused without writes. A power cut during changed-kernel rootfs writing leaves stock bootable. |
+| S6 | OpenWrt's headless hook accepts CRLF `opencreator-os/ACTION=repair-stock`, repairs damaged stock byte-for-byte, selects it and boots it. A repair power cut retains OpenWrt and the invalid-stock mark; the same stick completes repair on the next run. `ACTION=swap` boots stock only if selectable. At the UI menu, `c5-booted`, dropbear and lan are already running. Repair stock confirms after 5 s; Cancel writes nothing and shows Continue; ok repairs and shows "Rebooting into stock", reboots, and ends the app without Continue. |
+| S7 | `tools/make-restore-stick.sh --slot1 --flag-stock` uses a pristine repartitioned/c5os backup to restore slot 1 over OpenWrt, select it, and reboot into stock slot 1. A second run does nothing. |
+| S8 | A corrupt stick `root.squashfs` fails checksum validation without writes or flag changes; stock continues booting. |
+| S9 | Killing QEMU during rootfs writing leaves the stock flag and userdata `install-pending`. The next stock boot with the same stick finishes installation and test-boots slot 1. |
+| S10 | A chainloaded non-slot-1 kernel gets `c5.nocommit=1`. Preinit logs `test boot (c5.nocommit=1); counter and flag untouched`; `c5-booted` does not commit and the flag remains stock. |
+| S12 | Stock-layout UI flow with a 3 GiB stick: menu → whole-eMMC backup with verified recorded sums → delayed c5os prompt → userdata shrink/GPT rewrite preserving MBR/SPL and p1–p6 → install → chainload. Model, Wi-Fi override and authorized keys reside only on c5os and import into `/etc`. OpenWrt mounts c5os by label at `/data`, validates backup GPT and commits. A separate run forces stick `partx` failure without changing the GPT write or kernel partition view: installer records `c5os-rebooted` and reboots inside sysinit; the same stick completes c5os setup next boot, clears the marker and chainloads. |
+| S13 | Full userdata blocks before the menu; "Boot to stock" continues stock. Early/cancelled c5os prompts write no partitions. An unknown hook model is rejected in a running stock system with no eMMC writes, checked by the whole-device sectors-written counter. |
+| S14 | Stock UI shows "OpenWrt test failed" / `hung before OpenWrt started (watchdog reset)`; "Try again" opens the menu. Swap with an untested kernel recreates `pending-commit` and test-boots the slot's kernel with the UI stick inserted. A healthy boot commits and records `last-test` ok before showing "OpenWrt installed". Reboot shows "Rebooting into OpenWrt", ends the app without Continue, reboots and marks it seen. The next SPL boot shows the normal OpenWrt menu. Swap to stock continues stock; swap without an installation is disabled/refused. A headless stick that already started OpenWrt does not repeat it when the flag returns to stock. Reinstalling the same known-good build through the app selects OpenWrt directly, records `last-test` started, shows "Rebooting into OpenWrt", ends without Continue and reboots from stock. A later stock-side Swap with the known-good kernel also selects it directly and reboots without chainload or Continue. |
+| S15 | Relabelled c5os prevents `/data` mounting; `c5-booted` immediately fails the test with `reboot -f`, retains the stock flag, records `last-test` failed with reason, and removes `pending-commit`. No stock-invalid mark; counter, stock slot and userdata are untouched. Stock UI shows "OpenWrt test failed" with the reason; "Boot to stock" bypasses the menu, boots stock and marks it seen. A subsequent app Swap test with `C5_TEST_DEADLINE=10` fails identically at the deadline. |
+| S16 | USB `usb-net` Ethernet at boot, no PCI NIC, refreshed root required: image autoload entries load `usbnet`/`cdc_ether`, the adapter becomes eth0, and `br-lan` gets 10.0.2.15. `wpa_supplicant` runs; `hostapd` and `urngd` do not. |
 
 ## Not covered
 
-- The X2600 kernel (`kernel/`, DTS, config), its drivers (MMC timing, UARTs
-  `ttyS2/4/5/7`, USB host/OTG, Ethernet, Wi-Fi RTL8821CU and its power pin,
-  watchdog) and kernel modules: QEMU runs a malta kernel.
-- `chainload.ko` and the real jump (`c5-chainload.sh` stage/go): faked. Not
-  covered at all: the watchdog it arms, the `kernel/patches/0005` driver
-  change that keeps it fed, and a real watchdog reset (QEMU malta has no
-  X2600 watchdog).
-- The real SPL (binary code in the first MiB), its `ota` parsing beyond the
-  documented 11-byte compare, memory map and boot timing.
-- GPIO (PC11 heartbeat), the framebuffer and touchscreen (`/dev/fb0` is absent;
-  the os-installer app is replaced by `fixtures/fake-ui.sh`), Wi-Fi
-  association (`wireless.c5sta` needs a radio), network and SSH logins.
-- The stock 5.10 kernel's behaviour (mount options, devtmpfs, timing); stock
-  services after the USB hook (UI, Klipper, network, adb).
-- eMMC wear, write caching and power loss inside the device: a QEMU kill
-  loses only what the guest had not written yet.
+- X2600 kernel, DTS, config, modules and drivers: MMC timing, UARTs
+  `ttyS2/4/5/7`, USB host/OTG, Ethernet, RTL8821CU Wi-Fi/power pin and
+  watchdog.
+- `chainload.ko`, real `c5-chainload.sh` stage/go, watchdog arming,
+  `kernel/patches/0005` watchdog feeding and hardware watchdog resets.
+- SPL binary in the first MiB, `ota` parsing beyond the 11-byte compare,
+  memory map and boot timing.
+- PC11 heartbeat GPIO, framebuffer, touchscreen and the real os-installer
+  app. QEMU has no `/dev/fb0`.
+- Wi-Fi association (`wireless.c5sta` needs a radio), network and SSH logins.
+- Stock 5.10 kernel behavior, including mount options, devtmpfs and timing;
+  stock services after the USB hook: UI, Klipper, network and adb.
+- eMMC wear, write caching and internal power loss. Killing QEMU loses
+  only writes the guest has not submitted.

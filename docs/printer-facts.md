@@ -1,12 +1,12 @@
-# Creator 5 Pro facts this project relies on
+# Creator 5 Pro reference
 
 Labels: **Observed** = read on a printer or in a stock file; **Confirmed** =
-several sources agree; **Hypothesis** = not yet verified. Stock artifacts are
-named logically with SHA-256; raw captures never enter this repository.
+several sources agree; **Hypothesis** = not verified. Stock artifacts use
+logical names and SHA-256; raw captures are not stored in this repository.
 
-Source of the Observed items: `tools/printer/phase0.sh` run from the stock
-USB hook on 2026-10-26 (stock software 1.9.9, kernel package 2.0.7,
-Linux 5.10.186+, busybox 1.31.1).
+Observed source: `tools/printer/phase0.sh`, run from the stock USB hook on
+2026-10-26 with software 1.9.9, kernel package 2.0.7, Linux 5.10.186+ and
+busybox 1.31.1.
 
 ## eMMC and slots (Observed)
 
@@ -20,14 +20,13 @@ Linux 5.10.186+, busybox 1.31.1).
 | `usershare` | mmcblk0p6 | 1 GiB | stock `/usr/prog`, also mounted on `/etc` |
 | `userdata` | mmcblk0p7 | ~5.7 GiB | stock `/usr/data` |
 
-No `rtos` partition exists on this unit even though stock OTA scripts name
-one. Image limits: kernel uImage ≤ 8 MiB, root squashfs ≤ 100 MiB.
+No `rtos` partition exists on this unit; stock OTA scripts still name one.
+Image limits: kernel uImage ≤ 8 MiB, root squashfs ≤ 100 MiB.
 
-The installer changes this layout once (not an observation): it shrinks
-`userdata` to 2,018 MiB and adds `c5os` (mmcblk0p8, 4,096 MiB, ext4) after
-it, ending at the GPT's last usable sector 15,065,087. OpenWrt's fixed fstab
-mounts the ext4 filesystem labelled `c5os` at `/data` (`rw,noatime`); there
-is no fallback mount of `userdata`.
+The installer shrinks `userdata` to 2,018 MiB and adds ext4 `c5os`
+(`mmcblk0p8`, 4,096 MiB), ending at GPT last usable sector 15,065,087.
+This is an installer change, not an observation. OpenWrt's fixed fstab mounts
+label `c5os` at `/data` with `rw,noatime`; it never falls back to `userdata`.
 
 ## Bootloader (Observed; behaviour Confirmed with the stock OTA scripts)
 
@@ -53,16 +52,18 @@ is no fallback mount of `userdata`.
 ## Device tree (Observed)
 
 The running DTB is byte-identical in kernel packages 2.0.7 and 2.0.8
-(SHA-256 `29e46c95…94a7cc`). Enabled: uart0 (`uart0_pe`, console), uart2
-(`uart2_pd`, mainBoardGD), uart3 (`uart3_pb`, VDS dryer, RS-485 enable PC3),
-uart4 (`uart4_pb`, heaterBoard), uart5 (`uart5_pb`, eBoard), uart7
-(`uart7_pc`, levelBoard); msc0 8-bit HS200 1.8 V at 25 MHz, non-removable;
-OTG controller `dr_mode=otg` and host controller `dr_mode=host`, both PHYs
-with external VBUS detect; both PDMA controllers; i2c3 (no clients); the
-RISC-V remoteproc node. No MAC node is enabled and stock never loads its MAC
-driver, so the board is treated as having no Ethernet. No `chosen`, `memory`
-or `reserved-memory` nodes. `kernel/dts/creator5pro.dts` lists each
-difference from this as DEVIATION.
+(SHA-256 `29e46c95…94a7cc`). Enabled:
+
+- uart0 (`uart0_pe`, console), uart2 (`uart2_pd`, mainBoardGD), uart3
+  (`uart3_pb`, VDS dryer, RS-485 enable PC3), uart4 (`uart4_pb`, heaterBoard),
+  uart5 (`uart5_pb`, eBoard), uart7 (`uart7_pc`, levelBoard).
+- msc0: 8-bit HS200, 1.8 V, 25 MHz, non-removable.
+- OTG `dr_mode=otg` and host `dr_mode=host`, both PHYs with external VBUS detect.
+- Both PDMA controllers, i2c3 without clients, and RISC-V remoteproc.
+
+No MAC node is enabled and stock never loads the MAC driver; treat the board
+as having no Ethernet. No `chosen`, `memory` or `reserved-memory` nodes.
+`kernel/dts/creator5pro.dts` marks differences as DEVIATION.
 
 ## Peripherals (Observed)
 

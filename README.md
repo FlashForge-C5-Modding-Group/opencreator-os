@@ -1,27 +1,27 @@
 # opencreator-os
 
-OpenWrt-based replacement for the stock Linux on the FlashForge Creator 5
-and Creator 5 Pro (Ingenic X2600 host SoC), installed into the spare eMMC
-boot slot while the stock system stays in the other slot.
+OpenWrt-based replacement for stock Linux on the FlashForge Creator 5 and
+Creator 5 Pro (Ingenic X2600 host SoC). Installs in the spare eMMC boot slot,
+leaving stock in the other slot.
 
-Status: hardware bring-up in progress. The boot safety and installer changes
-described here are not yet validated on a printer; see `test/qemu/run.sh`
-for the system tests. OpenWrt-side installation is headless until display
-bring-up is verified on hardware.
+Status: installed and running on a Creator 5 Pro, with the touchscreen
+installer, test boot, display and touch. Not yet exercised on hardware: the
+watchdog reset and the boot-counter fallback. System tests:
+`test/qemu/run.sh`.
 
-- `docs/install.md`: backup, install, test boot, going back to stock
-- `docs/recovery.md`: safety mechanisms and every failure case
-- `docs/build.md`: building the image and the install stick
-- `docs/image.md`: what is in the image (kernel, packages, base files) and why
-- `docs/printer-facts.md`: what the printer was observed to do
+- `docs/install.md`: backup, installation, test boot and return to stock
+- `docs/recovery.md`: safety mechanisms and failure cases
+- `docs/build.md`: building the image and install stick
+- `docs/image.md`: kernel, packages and base files
+- `docs/printer-facts.md`: observed printer behaviour
 
 ## Phase 0 (read-only capture)
 
 Copy `tools/printer/runFirmwareExe.sh` and `tools/printer/phase0.sh` to the
-root of a FAT32 stick, insert it, power the printer on. Stock runs the hook
-before its UI, writes facts to `phase0/` on the stick, and then boots
-normally. Adding an empty file `BACKUP` also backs up the eMMC; see
-`docs/install.md`.
+root of a FAT32 stick and boot the printer with it. Before the stock UI
+starts, the hook writes facts to `phase0/` on the stick, then stock boots
+normally. Add an empty `BACKUP` file to back up the eMMC partitions except
+`userdata`; see `docs/install.md`.
 
 ## License
 

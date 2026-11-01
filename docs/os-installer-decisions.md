@@ -1,119 +1,108 @@
-# Storage layout and touchscreen installer: decisions so far
+# Storage layout and touchscreen installer decisions
 
-Starting point for the os-installer design (brainstorm, then spec, then plan).
-Not a spec. Labels: **Observed** (seen on the printer or in a stock file),
-**Decided** (agreed with the user), **Hypothesis** (not yet checked).
+Design reference, not a spec. Labels: **Observed** = seen on a printer or in a
+stock file; **Decided** = agreed with the user; **Hypothesis** = not verified.
 
 ## Storage
 
-- **Observed:** the eMMC is 15,307,776 sectors. Its GPT (8 entries, 7 used)
-  declares sectors 34 to 15,065,087 usable. `userdata` (p7) ends at 14,479,359,
-  so 585,728 sectors (286 MiB) inside the usable range are unallocated. About
-  118 MiB past the last usable sector is outside every partition.
-- **Observed:** stock's `/usr/bin/mount_mmc_ext4.sh` (run by
-  `S21mount_mmc_ext4` for `userdata` and `S09mount_mmc_prog` for `usershare`)
-  runs `fsck -y` and, if the mount still fails, `mkfs.ext4` on the partition.
-  It finds the partition with `fdisk -l | grep <name>`.
-- **Observed:** stock `/usr/data` holds about 1.0 GB: opencreator 439 MiB,
-  bin 362 MiB, python-hf 83 MiB, firmwareRes 45 MiB, gcodes 28 MiB, the rest
-  about 60 MiB.
-- **Decided:** shrink `userdata` and add one partition after it, so OpenWrt's
-  data is never on a filesystem stock may reformat:
-  - new partition: 4,096 MiB, ending at sector 15,065,087 (includes the free
-    286 MiB), ext4, GPT name `c5os`. The name must not contain any stock
-    partition name, because stock matches names with `grep`.
-  - `userdata`: shrunk to 2,018 MiB (filesystem shrunk with margin first).
-  - nothing is placed past sector 15,065,087 until that area is understood.
-  - p1 to p6 are never moved or resized.
-- **Decided:** OpenWrt keeps `/etc` in its slot overlay. Packages, Klipper,
+- **Observed:** the eMMC has 15,307,776 sectors. The GPT has 8 entries,
+  7 used, and usable sectors 34–15,065,087. `userdata` (p7) ends at
+  14,479,359, leaving 585,728 sectors (286 MiB) unallocated within the usable
+  range and about 118 MiB beyond it.
+- **Observed:** stock's `/usr/bin/mount_mmc_ext4.sh`, run by
+  `S21mount_mmc_ext4` for `userdata` and `S09mount_mmc_prog` for `usershare`,
+  runs `fsck -y`, then `mkfs.ext4` if mounting still fails. It finds
+  partitions with `fdisk -l | grep <name>`.
+- **Observed:** stock `/usr/data` uses about 1.0 GB: opencreator 439 MiB,
+  bin 362 MiB, python-hf 83 MiB, firmwareRes 45 MiB, gcodes 28 MiB, other
+  files about 60 MiB.
+- **Decided:** shrink `userdata` to 2,018 MiB and add ext4 `c5os` after it:
+  4,096 MiB ending at sector 15,065,087, including the free 286 MiB.
+  This isolates OpenWrt data from stock's automatic reformatting.
+  - Shrink the filesystem with margin before shrinking the partition.
+  - The GPT name must not contain a stock partition name: stock uses `grep`.
+  - Keep data partitions within sector 15,065,087; do not move or resize p1–p6.
+- **Decided:** OpenWrt keeps `/etc` in its slot overlay; packages, Klipper,
   Moonraker, logs and gcode go on `c5os`. The installer saves Wi-Fi settings,
-  optional SSH keys and the model on `c5os`; preinit imports them before
-  uci-defaults. `userdata` holds the saved stock images and staged chainload
-  kernel and is mounted only briefly by OpenWrt.
+  optional SSH keys and the model there; preinit imports them before
+  uci-defaults. `userdata` holds saved stock images and the staged chainload
+  kernel; OpenWrt mounts it only briefly.
 
 ## Installer
 
-- **Decided:** fork touchscreen-installer as `os-installer` (private, under the
-  org). Keep its platform layer (fb0, goodix touch, rotation, SDL), LVGL
-  submodule, build (`make mips32` static NaN-2008, `make sdl`), logo, log
-  viewer and progress bar. Replace the hardcoded opencreator-fs pages with a
-  generic screen engine driven by the shell backend.
-- **Decided:** all checks and every write stay in the opencreator-os shell
-  backend (`installer/opencreator-os/`), which the QEMU tests cover. The app
-  only draws what the backend asks for.
-- **Decided (sketch):** the backend requests screens with lines such as
-  `INFO`, `CONFIRM <id> <delay> ...` and `BLOCK <id> ...`; the app replies
-  `ANSWER <id> ok|cancel` on the backend's stdin. End of input counts as
-  cancel. The backend also rejects an `ok` that arrives before the delay.
-- **Decided (user requirements):**
-  - checks run before every write;
-  - when stock's data does not fit the shrunk `userdata`, a blocking screen
-    says "Please free X MB on /usr/data" and offers only "Boot to stock"
-    (`BLOCK <id> <text>|<button>`: the button exits the app with 1, so the
-    stock hook boots on);
-  - creating the partition needs a confirm screen ("Create a 4 GB
-    partition") whose Ok button unlocks after 5 seconds;
-  - the eMMC backup is an installer step, written to the USB stick and
-    verified before anything on the eMMC is written. It must include
-    `userdata` while it is still full size.
-- **Decided:** the repartition runs under stock, from the USB hook, before
-  OpenWrt is installed. OpenWrt's display bring-up is not hardware-verified;
-  use headless installer actions there for now. Stock has
-  `resize2fs`, `e2fsck`, `mkfs.ext4` and `partprobe`; it has no GPT editor, so
-  the stick carries static util-linux `sfdisk` (GPT rewrite, backup header at
-  the disk end) and `partx` (tells the kernel through `BLKPG`, and finds
-  partitions by GPT name for `slot.sh`), built by
-  `installer/tools/build.sh`. If the kernel still shows the old table, the
-  installer reboots once and continues.
-- **Decided:** PC demo = the SDL build under WSLg running the real backend
-  against a sparse disk image laid out like the printer's eMMC, through the
-  backend's path overrides (`C5_DISK`, `C5_SYSBLOCK`, `C5_CMDLINE_FILE`, ...).
-  The jump into OpenWrt is not part of the demo (QEMU covers it).
-  `libsdl2-dev` (2.30.0) is installed in WSL.
-- **Decided:** the same install stick runs from OpenWrt's boot-time USB hook.
-  Its actions are "Update / Repair OpenWrt", "Swap to stock" and "Repair stock";
-  headless operation reads `opencreator-os/ACTION`. No action file on
-  headless OpenWrt means no action; stock still defaults to install.
-- **Decided:** only the exact model pairs `Creator5 0028` and
-  `Creator5Pro 0029` are accepted; other pairs are refused before writes.
+- **Decided:** `os-installer` is private under the org. It uses
+  touchscreen-installer's fb0, Goodix touch, rotation and SDL platform layer,
+  LVGL submodule, static NaN-2008 `make mips32` build, `make sdl` build,
+  logo, log viewer and progress bar. A generic screen engine follows the
+  shell backend.
+- **Decided:** all checks and writes belong in
+  `installer/opencreator-os/`, covered by QEMU tests. The app only draws
+  backend-requested screens. The protocol is documented in `lib.sh`:
+  status, progress, confirmation, menu and blocking screens; `ANSWER` replies
+  on stdin. EOF cancels; the backend rejects confirmation before its delay.
+- **Decided:** checks precede writes. If stock data will not fit, block with
+  "Please free X MB on /usr/data" and only "Boot to stock". A `BLOCK` button
+  exits the app with status 1, letting the stock hook continue.
+- **Decided:** creating the partition requires a "Create a 4 GB partition"
+  confirmation with a 5-second button delay.
+- **Decided:** offer an optional eMMC backup to the USB stick. If selected,
+  verify it before eMMC writes, including `userdata` at full size.
+- **Decided:** repartition under stock's USB hook before installing OpenWrt.
+  Stock provides `resize2fs`, `e2fsck`, `mkfs.ext4` and `partprobe`, but no
+  GPT editor. The stick carries static util-linux `sfdisk` to rewrite the
+  GPT with its backup header at disk end, and `partx` to update the kernel
+  through `BLKPG` and find partitions by GPT name for `slot.sh`. Build them
+  with `installer/tools/build.sh`. If the kernel retains the old table,
+  reboot once and continue.
+- **Decided:** use the touchscreen app on stock and OpenWrt; display and
+  touch work on the printer. A missing app or display/touch falls back to
+  headless operation (`installer/runFirmwareExe.sh`).
+- **Decided:** the PC demo runs the SDL build with the real backend, a sparse
+  printer-layout eMMC image, and path overrides such as `C5_DISK`,
+  `C5_SYSBLOCK` and `C5_CMDLINE_FILE`. QEMU, not the demo, covers the jump
+  into OpenWrt.
+- **Decided:** OpenWrt's boot-time USB hook runs the same stick, offering
+  "Update / Repair OpenWrt", "Swap to stock" and "Repair stock".
+  Headless operation reads `opencreator-os/ACTION`; without it, OpenWrt
+  takes no action and stock defaults to install.
+- **Decided:** accept only `Creator5 0028` and `Creator5Pro 0029`; reject
+  other model pairs before writes.
 - **Decided:** normal OpenWrt boots keep the flag on OpenWrt. Three failed
-  boots reaching preinit trigger stock fallback on the next attempt if stock
-  is selectable; START=99 with `/data` mounted resets the counter. Only a
-  matching `pending-commit` permits the health service to change the flag.
-  Hardware watchdog feeding is handled by procd, not a separate daemon.
-- **Decided:** Install and Swap to OpenWrt on stock always end in OpenWrt:
-  a kernel matching `good-kernel` gets the boot flag and a reboot, any other
-  a chainload test boot that commits via `pending-commit`. The former
-  `FLIP`/`CHAINLOAD` stick options are gone. A headless hook run does not
-  repeat this for the same stick payload, so a stick left in cannot loop.
+  boots reaching preinit trigger stock fallback on the next attempt if
+  stock is selectable. START=99 with `/data` mounted resets the counter.
+  Only a matching `pending-commit` lets the health service change the flag.
+  Procd feeds the hardware watchdog; no separate daemon.
+- **Decided:** Install and Swap to OpenWrt on stock end in OpenWrt. A kernel
+  matching `good-kernel` gets the boot flag and a reboot; other kernels get
+  a chainload test boot, committed through `pending-commit`. A headless hook
+  does not repeat the same stick payload, preventing loops with a stick left in.
 - **Decided:** a failed test boot returns to stock without a power cycle.
-  `chainload.ko` arms the SoC watchdog for the jump (default 120 s,
-  `C5CL_WDT`) and the OpenWrt kernel keeps it fed until procd opens it
-  (`kernel/patches/0005`). OpenWrt fails a test boot back to stock at once
-  when `/data` is not mounted at START=99, or when it is not healthy 180 s
-  after preinit; test boots do not count toward the three failed boots. It
-  never writes the stock slot, `userdata` or the stock-invalid mark. The
-  watchdog path is not verified on hardware.
-- **Decided:** the outcome of the boot the installer started (test boot or
-  flip) is recorded in `c5os` `opencreator-os/last-test` and reported once.
-  A failure, or a hang (`started` still there), is reported by the next stock
-  run: "OpenWrt test failed" with the reason, "Try again" (menu) or "Boot to
-  stock". Success is reported by OpenWrt's run of the stick, which the USB
-  hook defers until `c5-booted` has decided: "OpenWrt installed" with one
-  "Reboot" button; headless only a log line.
+  `chainload.ko` arms the SoC watchdog before jumping: default 120 s,
+  configurable through `C5CL_WDT`. OpenWrt feeds it until procd opens it
+  (`kernel/patches/0005`). OpenWrt returns to stock immediately if `/data`
+  is not mounted at START=99, or if the boot is not healthy 180 s after
+  preinit. Test boots do not count toward the three-boot limit and never
+  write the stock slot, `userdata` or stock-invalid mark.
+  The watchdog path is not verified on hardware.
+- **Decided:** record each installer-started boot at
+  `opencreator-os/last-test` on `c5os` and report it once:
+  - Failure or a remaining `started` record: the next stock run shows
+    "OpenWrt test failed", its reason, "Try again" for the menu, and
+    "Boot to stock".
+  - Success: OpenWrt's USB hook waits for `c5-booted`, then shows
+    "OpenWrt installed" with "Reboot". Headless operation logs it.
 
 ## Open questions for the design
 
-- **Hypothesis:** nothing holds files open on `/usr/data` when the USB hook
-  runs, so it can be unmounted for the shrink. Check `/proc/*/fd`, `cwd` and
-  `maps` at hook time; if the unmount fails the installer must stop with
-  nothing written.
-- **Unknown:** what the 118 MiB past the last usable sector holds, and where
-  the backup GPT header is (disk end or right after sector 15,065,087).
-  The repartition must rewrite the backup header where the bootloader and
-  stock expect it.
-- **Unknown:** whether `partprobe` can re-read the table while `usershare` is
-  mounted, or the installer must reboot between repartitioning and use.
-- **Unknown:** whether a stock OTA update or factory reset depends on the
-  `userdata` size (`ota_utils.sh` checks kernel/rootfs/rtos sizes only, as far
-  as read so far).
+- **Hypothesis:** no process holds `/usr/data` open at USB-hook time.
+  Check `/proc/*/fd`, `cwd` and `maps`; unmount failure must stop the shrink
+  without writes.
+- **Unknown:** the contents of the 118 MiB beyond the original last usable
+  sector, and whether stock or the bootloader depends on the original
+  backup GPT location. The installer moves the backup GPT to disk end and
+  refuses to proceed if the final 33 sectors contain data.
+- **Unknown:** whether the kernel accepts the partition update while
+  `usershare` is mounted. The installer uses `partx` and reboots if needed.
+- **Unknown:** whether stock OTA updates or factory reset depend on
+  `userdata` size. The reviewed `ota_utils.sh` size checks cover only
+  kernel, rootfs and rtos.
