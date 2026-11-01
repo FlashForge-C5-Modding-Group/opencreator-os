@@ -59,6 +59,13 @@ trigger an incremental build using those objects. Fixture changes refresh
 the test rootfs; they do not rebuild the OpenWrt image or the 5.10 chainload
 kernel. Scenarios run again on each invocation.
 
+S12 streams backup chunks directly from the FAT stick into the host-side
+checksums instead of extracting another complete eMMC copy. Its temporary
+eMMC and stick drives use QEMU `cache=unsafe`: guest sync/reboot and all
+backup readback checks still run, but host-media flushes are skipped. S12
+does not simulate power cuts; other scenarios keep QEMU's default cache
+policy. This does not change fixtures or the printer's partition geometry.
+
 Rootfs refreshes use a new temporary staging directory rather than reusing
 an old `openwrt-stage`. Extraction, copying, permissions and packing errors
 abort setup; only missing OpenWrt artifacts intentionally skip scenarios.

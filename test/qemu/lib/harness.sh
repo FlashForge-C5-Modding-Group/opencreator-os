@@ -421,6 +421,19 @@ make_stick() {
 }
 stick_cat() { mtype -i "$1@@1M" "::$2" 2>/dev/null; }
 
+# Hash FAT backup chunks in filename order without extracting them. mtype
+# adds headings when expanding multiple files itself, so read one at a time.
+stick_chunks_sum() (
+	set -o pipefail
+	local image=$1 pattern=$2 files
+	files=$(mdir -b -i "$image@@1M" "::$pattern") || return 1
+	[ -n "$files" ] || return 1
+	printf '%s\n' "$files" | LC_ALL=C sort |
+		while IFS= read -r path; do
+			mtype -i "$image@@1M" "$path" || exit 1
+		done | sha256sum | cut -d' ' -f1
+)
+
 # --------------------------------------------------------------- booting --
 
 # SPL emulator: the root device the Creator 5 Pro SPL would boot from DISK.
@@ -462,7 +475,7 @@ boot() {
 	q=(qemu-system-mipsel -M malta -cpu "$QEMU_CPU" -m "$QEMU_MEM" -kernel "$VMLINUX"
 		-append "$cl"
 		-display none -monitor none -serial stdio -no-reboot
-		-drive "if=none,id=emmc,file=$disk,format=raw,aio=$QEMU_AIO"
+		-drive "if=none,id=emmc,file=$disk,format=raw,aio=$QEMU_AIO${QEMU_CACHE:+,cache=$QEMU_CACHE}"
 		-device sdhci-pci -device sd-card,drive=emmc)
 	if [ -n "$stick" ] || [ "${QEMU_USB_NIC:-0}" = 1 ]; then
 		q+=(-device qemu-xhci,id=xhci)
@@ -473,7 +486,7 @@ boot() {
 		q+=(-nic user,model=pcnet,restrict=on)
 	fi
 	# the stick sits on xHCI: UHCI's ~1 MB/s is too slow for S12's backup
-	[ -n "$stick" ] && q+=(-drive "if=none,id=stick,file=$stick,format=raw,aio=$QEMU_AIO"
+	[ -n "$stick" ] && q+=(-drive "if=none,id=stick,file=$stick,format=raw,aio=$QEMU_AIO${QEMU_CACHE:+,cache=$QEMU_CACHE}"
 		-device usb-storage,bus=xhci.0,drive=stick)
 	say "boot $BOOTN '$name': $(echo "$cl" | grep -o 'root=[^ ]*')$(echo " $cl" | grep -o ' c5\.[^ ]*' | tr -d '\n') flag='$(img_flag "$disk")'${stick:+ stick=${stick##*/}}$([ "${QEMU_USB_NIC:-0}" = 1 ] && echo ' usb-nic')"
 	: > "$RUN/$name.res"

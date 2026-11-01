@@ -176,7 +176,7 @@ class PayloadHelpersTest(unittest.TestCase):
         self.assert_checksums()
 
     def prepare_stick(self):
-        for tool in ("sfdisk", "mkfs.vfat", "mcopy", "mtype"):
+        for tool in ("sfdisk", "mkfs.vfat", "mcopy", "mtype", "mdir"):
             if not shutil.which(tool):
                 self.skipTest(f"requires {tool}")
         self.out.mkdir()
@@ -188,6 +188,35 @@ class PayloadHelpersTest(unittest.TestCase):
         result = self.must(self.command("mtype", "-i", str(self.root / "stick.img") + "@@1M",
                                         "::hello.txt"))
         self.assertEqual(result.stdout, "real FAT32 payload\n")
+
+    def test_stick_chunks_sum_streams_binary_backup_chunks_in_order(self):
+        self.prepare_stick()
+        backup = self.out / "emmc-backup"
+        backup.mkdir()
+        chunks = [bytes(range(256)) * 17, b"\r\n\x00\xfflast chunk\n"]
+        for index, data in reversed(list(enumerate(chunks))):
+            (backup / f"userdata.img.{index:03}").write_bytes(data)
+        self.must(self.helper("make_stick"))
+        image = shlex.quote(str(self.root / "stick.img"))
+        script = (f"set -o pipefail; source {shlex.quote(str(HARNESS))}; "
+                  f"stick_chunks_sum {image} '/emmc-backup/userdata.img.[0-9][0-9][0-9]'")
+        result = self.must(self.command("bash", "-c", script))
+        self.assertEqual(result.stdout.split()[0],
+                         hashlib.sha256(b"".join(chunks)).hexdigest())
+
+    def test_stick_chunks_sum_rejects_missing_chunks_and_read_errors(self):
+        self.prepare_stick()
+        backup = self.out / "emmc-backup"
+        backup.mkdir()
+        self.put(backup / "userdata.img.000", "backup bytes\n")
+        self.must(self.helper("make_stick"))
+        image = shlex.quote(str(self.root / "stick.img"))
+        base = f"source {shlex.quote(str(HARNESS))}; "
+        self.assert_failed(self.command("bash", "-c", base +
+            f"stick_chunks_sum {image} '/emmc-backup/missing.img.*'"))
+        self.assert_failed(self.command("bash", "-c", base +
+            'mtype() { command mtype "$@"; return 1; }; ' +
+            f"stick_chunks_sum {image} '/emmc-backup/userdata.img.*'"))
 
     def test_stick_cleanup_failure_is_not_masked_by_successful_copy(self):
         self.prepare_stick()

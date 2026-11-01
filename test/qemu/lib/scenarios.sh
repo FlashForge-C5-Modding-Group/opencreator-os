@@ -781,6 +781,9 @@ gpt_layout() { sgdisk -p "$1" 2>/dev/null | awk '$1 ~ /^[0-9]+$/ { print $1, $2,
 # S12: the full touchscreen flow on a stock-layout printer: menu -> backup
 # -> c5os repartition -> install -> chainload; then OpenWrt on c5os.
 scenario_S12() {
+	# No power-cut check here: guest sync/reboot and host page-cache reads
+	# suffice, without paying for durable host-media flushes on these images.
+	local QEMU_CACHE=unsafe
 	new_stock_disk
 	echo "keep me" > "$RUN/keep.txt"
 	data_put "$DISK" "$RUN/keep.txt" /qemu-keep.txt || { fatal "cannot put the marker on userdata"; return 0; }
@@ -801,17 +804,21 @@ scenario_S12() {
 
 	rm -rf "$bk"
 	mkdir -p "$bk"
-	mcopy -s -n -i "$stick@@1M" ::emmc-backup "$bk/" 2>/dev/null
-	check "backup: VERIFIED = checksum of SHA256SUMS" is_eq "$(tr -d '\r\n' < "$bk/emmc-backup/VERIFIED" 2>/dev/null)" "$(sha256sum < "$bk/emmc-backup/SHA256SUMS" 2>/dev/null | cut -d' ' -f1)"
-	check "backup: lists p1-p7, first-mib, disk-tail" is_eq "$(awk '{ print $2 }' "$bk/emmc-backup/SHA256SUMS" 2>/dev/null | tr '\n' ' ')" \
+	# Keep only metadata on the host; stream the full backup bytes from FAT
+	# into the same hashes instead of first materializing another 2 GiB copy.
+	for name in VERIFIED SHA256SUMS partmap.txt; do
+		mcopy -n -i "$stick@@1M" "::emmc-backup/$name" "$bk/$name" 2>/dev/null
+	done
+	check "backup: VERIFIED = checksum of SHA256SUMS" is_eq "$(tr -d '\r\n' < "$bk/VERIFIED" 2>/dev/null)" "$(sha256sum < "$bk/SHA256SUMS" 2>/dev/null | cut -d' ' -f1)"
+	check "backup: lists p1-p7, first-mib, disk-tail" is_eq "$(awk '{ print $2 }' "$bk/SHA256SUMS" 2>/dev/null | tr '\n' ' ')" \
 		"first-mib.bin kernel.img rootfs.img kernel2.img rootfs2.img ota.img usershare.img userdata.img disk-tail.img "
 	while read -r sum name; do
 		case "$name" in
-		first-mib.bin) got=$(sha256sum < "$bk/emmc-backup/first-mib.bin" | cut -d' ' -f1); start=0 size=2048 ;;
-		disk-tail.img) got=$(cat "$bk/emmc-backup/disk-tail.img".[0-9][0-9][0-9] | sha256sum | cut -d' ' -f1); start=$((GPT_QUIRK_LAST + 1)) size=$((DISK_SECTORS - GPT_QUIRK_LAST - 1)) ;;
+		first-mib.bin) got=$(stick_cat "$stick" /emmc-backup/first-mib.bin | sha256sum | cut -d' ' -f1); start=0 size=2048 ;;
+		disk-tail.img) got=$(stick_chunks_sum "$stick" "/emmc-backup/$name.[0-9][0-9][0-9]"); start=$((GPT_QUIRK_LAST + 1)) size=$((DISK_SECTORS - GPT_QUIRK_LAST - 1)) ;;
 		*)
-			got=$(cat "$bk/emmc-backup/$name".[0-9][0-9][0-9] | sha256sum | cut -d' ' -f1)
-			read -r _ n start size < <(awk -v p="${name%.img}" '$1 == p' "$bk/emmc-backup/partmap.txt")
+			got=$(stick_chunks_sum "$stick" "/emmc-backup/$name.[0-9][0-9][0-9]")
+			read -r _ n start size < <(awk -v p="${name%.img}" '$1 == p' "$bk/partmap.txt")
 			;;
 		esac
 		if [ "$name" = usershare.img ] || [ "$name" = userdata.img ]; then
@@ -822,7 +829,7 @@ scenario_S12() {
 		fi
 		want=$(img_bytes "$before" $((start * 512)) $((size * 512)) | sha256sum | cut -d' ' -f1)
 		check "backup: $name = recorded sum = the eMMC before the repartition" is_eq "$got:$sum" "$want:$want"
-	done < <(tr -d '\r' < "$bk/emmc-backup/SHA256SUMS" 2>/dev/null)
+	done < <(tr -d '\r' < "$bk/SHA256SUMS" 2>/dev/null)
 	rm -rf "$bk"
 
 	check "GPT: p7 userdata shrunk, p8 c5os" is_eq "$(gpt_layout "$DISK" | sed -n '7,8p' | tr '\n' ';')" \
