@@ -6,7 +6,7 @@
 #
 # Env: INGENIC_SDK_DIR    where the SDK tarball lives / is downloaded to
 #      INGENIC_FTP_USER   default ingenic_public
-#      INGENIC_FTP_PASS   needed only when the tarball must be downloaded
+#      INGENIC_FTP_PASS   default BFdg2f9B12 (Ingenic's public login)
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -25,7 +25,7 @@ if [ ! -f "$KSRC/Makefile" ]; then
 	if [ ! -f "$SDK_DIR/$TARBALL" ]; then
 		mkdir -p "$SDK_DIR"
 		log "downloading $TARBALL (680 MB)"
-		curl -fsS --retry 5 -C - --user "${INGENIC_FTP_USER:-ingenic_public}:${INGENIC_FTP_PASS:?set INGENIC_FTP_PASS}" \
+		curl -fsS --retry 5 -C - --user "${INGENIC_FTP_USER:-ingenic_public}:${INGENIC_FTP_PASS:-BFdg2f9B12}" \
 			-o "$SDK_DIR/$TARBALL" "$FTP_URL$TARBALL"
 	fi
 	log "verifying md5"

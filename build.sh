@@ -6,7 +6,6 @@
 # Env: WORK (default ~/build/opencreator-os)  build trees (regenerable)
 #      OUT  (default /mnt/f/creator5-dev/opencreator-os-builds; set it)  artifacts
 #      JOBS (default nproc)
-#      INGENIC_FTP_PASS  only if the SDK tarball must be downloaded
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")" && pwd)

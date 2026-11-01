@@ -14,13 +14,8 @@ sudo apt install build-essential clang flex bison g++ gawk gcc-multilib \
 
 ## 2. Get the Ingenic downloads
 
-Both come from Ingenic's FTP server, `ftp://ftp.ingenic.com.cn`. Log in as
-`ingenic_public`; Ingenic gives out the password, and it is not stored in
-this repository. Export it for this step and step 5:
-
-```sh
-export INGENIC_FTP_PASS=...
-```
+Both come from Ingenic's FTP server, `ftp://ftp.ingenic.com.cn`, with
+Ingenic's public login: user `ingenic_public`, password `BFdg2f9B12`.
 
 **Toolchain** (MIPS GCC 12.1, glibc 2.33; the one stock was built with).
 Ingenic's toolchains are in `/Ingenic-MIPS-Toolchain/releases/` ([release
@@ -28,7 +23,7 @@ notes](https://www.ingenic.com.cn/news-detail/nid-348.html)). Use r6.0.0
 (235 MB), and unpack it where the scripts look for it:
 
 ```sh
-curl -fO -u "ingenic_public:$INGENIC_FTP_PASS" \
+curl -fO -u ingenic_public:BFdg2f9B12 \
   ftp://ftp.ingenic.com.cn/Ingenic-MIPS-Toolchain/releases/ingenic-mips-toolchain-r6.0.0/mips-xburst2-linux-toolchain-r6.0.0.tar.bz2
 echo "4e3359e32c2fb7d9e573ce84370220a66e3998bb911452d82267394fad4086e0  mips-xburst2-linux-toolchain-r6.0.0.tar.bz2" | sha256sum -c
 mkdir -p ~/ing && tar -xjf mips-xburst2-linux-toolchain-r6.0.0.tar.bz2 -C ~/ing
