@@ -227,14 +227,14 @@ stick with the install stick or with opencreator-fs's stick.
 
 ### Install stick on OpenWrt
 
-Use a stick built by `tools/make-install-stick.sh` without the app.
-OpenWrt's `c5-usb-hook` (START=19) mounts the first mountable FAT USB
-candidate read-write at `/mnt`, runs `runFirmwareExe.sh` with the stored
-model, then unmounts. It runs detached, one run at a time, with output in
-syslog; boot and SSH do not wait. Display bring-up is not verified on
-hardware, including the kernel boot log. With the app, Repair stock
-requires confirmation. A missing or invalid `/data/opencreator-os/model`
-skips the hook; inspect `logread -e c5-usb-hook` over SSH.
+Works with or without the app. OpenWrt's `c5-usb-hook` (START=19) mounts the
+first mountable FAT USB candidate read-write at `/mnt`, runs
+`runFirmwareExe.sh` with the stored model, then unmounts. It runs detached,
+one run at a time, with output in syslog; boot, Wi-Fi and SSH do not wait.
+While a test outcome is pending, the hook waits for `c5-booted`'s health
+decision so the installer can report it. A missing or invalid
+`/data/opencreator-os/model` skips the hook; inspect
+`logread -e c5-usb-hook` over SSH.
 
 Put one word in the stick's `opencreator-os/ACTION`:
 
@@ -254,6 +254,14 @@ The log is `opencreator-os-install.log` on the stick, and
 Repair takes its images from the saved copy on `userdata`, not from the
 stick. If that copy is lost, use the PC backup with the SSH helpers below.
 It does not restore `usershare`.
+
+`update` ignores `sysupgrade`'s exit status: a successful handover stops
+ubusd, so it returns "Connection failed". The installer waits up to 60 s
+for stage2 to kill it; if the wait expires, nothing was written and it
+reports "Update / Repair FAILED".
+
+Stock-side reboots use `sync; reboot -f`, because stock's init is still
+blocked in the synchronous USB hook. OpenWrt reboots normally.
 
 ## Failure cases
 

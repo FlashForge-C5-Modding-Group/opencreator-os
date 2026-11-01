@@ -124,3 +124,16 @@ It must sort after OpenWrt 24.10.8's `10-default.conf`, which enables
 forwarding and sets a 3-second panic timeout. This release's netifd does not
 write forwarding sysctls during interface setup. S2 checks forwarding stays
 zero after boot and a lan `ifup`.
+
+`/etc/config/fstab` mounts ext4 label `c5os` at `/data` (`rw,noatime`), with
+no `userdata` fallback, and enables `/data/swapfile` (`config swap`).
+`c5-booted` creates the 256 MiB swap file once, after the first healthy
+boot without it, unless less than 64 MiB would stay free
+(`logread -e c5-swap`). `c5-swap` turns swap off before `/data` is unmounted
+and before sysupgrade, so `c5os` unmounts cleanly. The file lives on `c5os`
+and survives sysupgrade.
+
+Preinit (`79_c5_import`) copies `model`, `wifi.conf` and `authorized_keys`
+from `c5os`'s `opencreator-os/` into `/etc/c5/` and `/etc/dropbear/` when the
+destination is empty, and stages a saved `sysupgrade.tgz`.
+`/lib/upgrade/keep.d/c5` keeps `/etc/c5/` across sysupgrade.
