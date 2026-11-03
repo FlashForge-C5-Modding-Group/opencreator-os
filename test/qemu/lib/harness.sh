@@ -388,6 +388,25 @@ make_ui_payload() {
 	resum "$out"
 }
 
+# make_fake_stack DIR: the three archives of tools/make-stack.sh, faked. The
+# stack's install.sh records each run (web interface and model) in
+# /data/fake-stack-runs, and fails while /data/fake-stack-fail exists.
+make_fake_stack() {
+	local d=$1 w=$1/src ui
+	rm -rf "$d" && mkdir -p "$w/stack" || return 1
+	echo 'stack fake 1' > "$w/stack/VERSION" || return 1
+	cat > "$w/stack/install.sh" <<'EOF' || return 1
+[ ! -f /data/fake-stack-fail ] || exit 1
+echo "run $(cat "$1/webui") $(cat "$C5_MODEL_FILE")" >> /data/fake-stack-runs
+EOF
+	tar -czf "$d/stack.tar.gz" --owner=0 --group=0 -C "$w/stack" . || return 1
+	for ui in fluidd mainsail; do
+		mkdir -p "$w/$ui" && echo "fake $ui" > "$w/$ui/index.html" || return 1
+		tar -czf "$d/$ui.tar.gz" --owner=0 --group=0 -C "$w/$ui" . || return 1
+	done
+	rm -rf "$w"
+}
+
 # fixtures/fake-c5-chainload.sh with the repo's chainload/c5-chainload.sh
 # embedded as function c5cl_real (used for its "args" computation)
 fake_chainload() {

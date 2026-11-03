@@ -29,13 +29,17 @@
 # Payload in DIR: kernel.uimage root.squashfs sysupgrade.tar VERSION
 # chainload/chainload.ko chainload/c5-chainload.sh SHA256SUMS MD5SUMS,
 # opencreator-os/slot.sh, restore.sh, bin/sfdisk and bin/partx, optional
-# opencreator-os/authorized_keys.
+# opencreator-os/authorized_keys, optional stack/stack.tar.gz
+# stack/fluidd.tar.gz stack/mainsail.tar.gz (the printer stack,
+# docs/stack.md) and optional opencreator-os/WEBUI (fluidd or mainsail; the
+# web interface of headless runs).
 set -u
 
-usage() { sed -n '2,32s/^# \{0,1\}//p' "$0"; }
+usage() { sed -n '2,35s/^# \{0,1\}//p' "$0"; }
 
 SELF_DIR=$(cd "$(dirname "$0")" && pwd) || exit 1
 STICK='' CHECK=0 YES=0 HOOK=0 UI=0 ACTION='' BACKUP=0 MACHINE='' PID='' MODEL_ARGS=0
+HAVE_STACK=0 STACK_BYTES=0 WEBUI=''
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--from-stick)
@@ -181,6 +185,7 @@ preflight() {
 	RSUM=$(sums_get "$STICK/$SUMS" root.squashfs)
 	if [ -z "$KSUM" ] || [ -z "$RSUM" ]; then abort "$SUMS does not list kernel.uimage and root.squashfs"; fi
 	bad=$(sums_verify "$STICK" "$SUMS") || abort "payload checksum mismatch ($SUMS): ${bad:-empty list}"
+	stack_check
 	UP_TO_DATE=0
 	if [ "$(dev_sum "$TK" "$KSZ")" = "$KSUM" ] && [ "$(dev_sum "$TR" "$RSZ")" = "$RSUM" ]; then
 		UP_TO_DATE=1
@@ -215,6 +220,7 @@ preflight() {
 	fi
 	need=$((KSZ + 6 * 1024 * 1024))
 	[ "$STOCK_SAVED" = 1 ] || need=$((need + OKB + BU))
+	need=$((need + STACK_BYTES))
 	[ "$need" -ge "$MIN_FREE" ] || need=$MIN_FREE
 
 	if [ "$HAVE_C5OS" = 0 ]; then
@@ -356,28 +362,17 @@ save_settings() {
 			fail "cannot copy authorized_keys"
 		log "ssh: copied authorized_keys to c5os"
 	fi
+	for f in extruder.json zoffset.json test.json; do
+		if [ -f "$C5_DATA/firmwareRes/config/$f" ]; then
+			{ mkdir -p "$dest/calibration" &&
+				cp "$C5_DATA/firmwareRes/config/$f" "$dest/calibration/$f.new" &&
+				mv -f "$dest/calibration/$f.new" "$dest/calibration/$f"; } || fail "cannot copy calibration $f"
+			log "calibration: copied $f to c5os"
+		else
+			log "calibration: $C5_DATA/firmwareRes/config/$f not found"
+		fi
+	done
 	sync
-}
-
-# plant_stage2: the second stage, for OpenWrt's first real boot (docs/stage2.md).
-# A printer that already finished it or declined keeps its choice on a reinstall.
-plant_stage2() {
-	s2=$OCDIR/stage2
-	if [ -f "$s2/done" ] || [ -f "$s2/declined" ]; then
-		log "stage2: already handled; not planted"
-		return 0
-	fi
-	mkdir -p "$s2" || return 1
-	cp "$SELF_DIR/stage2.sh" "$SELF_DIR/lib.sh" "$SELF_DIR/slot.sh" "$s2/" || return 1
-	if [ -f "$SELF_DIR/os-installer" ]; then
-		cp "$SELF_DIR/os-installer" "$s2/" && chmod 755 "$s2/os-installer" || return 1
-	fi
-	if [ -s "$STICK/opencreator-os/manifest-url" ]; then
-		cp "$STICK/opencreator-os/manifest-url" "$s2/" || return 1
-	fi
-	: > "$s2/pending" || return 1
-	sync
-	log "stage2: planted"
 }
 
 # c5os_do OPTS CMD...: run CMD with c5os mounted at $C5M with OPTS (the
@@ -619,6 +614,111 @@ chainload_test() {
 	fi
 	sh "$cl" go
 	exit 0
+}
+
+# --- printer stack (docs/stack.md) ----------------------------------------------
+# The stick's stack/ holds the printer software (stack.tar.gz) and both web
+# interfaces; the installer copies the stack and the chosen interface to
+# $OCDIR/stack, and c5-stack-setup installs them on the next committed
+# OpenWrt boot.
+
+# stack_check: HAVE_STACK=1 when the stick carries the stack, every archive
+# listed in $SUMS; STACK_BYTES is the most planting copies to c5os
+stack_check() {
+	if [ -z "${SUMS:-}" ]; then
+		sum_init || abort "neither sha256sum nor md5sum available"
+	fi
+	HAVE_STACK=0 STACK_BYTES=0
+	[ -f "$STICK/stack/stack.tar.gz" ] || return 0
+	for sc_f in stack/stack.tar.gz stack/fluidd.tar.gz stack/mainsail.tar.gz; do
+		if [ ! -s "$STICK/$sc_f" ] || [ -z "$(sums_get "$STICK/$SUMS" "$sc_f" 2> /dev/null)" ]; then
+			abort "stick stack/ is incomplete: $sc_f missing or not in $SUMS"
+		fi
+	done
+	sc_ui=$(file_bytes "$STICK/stack/fluidd.tar.gz")
+	sc_m=$(file_bytes "$STICK/stack/mainsail.tar.gz")
+	if [ "$sc_m" -gt "$sc_ui" ]; then sc_ui=$sc_m; fi
+	HAVE_STACK=1
+	STACK_BYTES=$(($(file_bytes "$STICK/stack/stack.tar.gz") + sc_ui))
+}
+
+# pick_webui: WEBUI = fluidd or mainsail, asked on the screen; headless runs
+# read opencreator-os/WEBUI (ui_menu would answer from ACTION)
+pick_webui() {
+	if [ "$UI" = 1 ]; then
+		ui_menu webui "Choose a web interface\nFor the printer software on this stick. It also needs Kalico firmware on the printer's boards." "Fluidd" "Mainsail"
+		case "$UI_CHOICE" in
+		1) WEBUI=fluidd ;;
+		2) WEBUI=mainsail ;;
+		*) abort "cancelled at webui" ;;
+		esac
+	elif [ -f "$STICK/opencreator-os/WEBUI" ]; then
+		WEBUI=$(tr -d '\r\n ' < "$STICK/opencreator-os/WEBUI")
+		case "$WEBUI" in
+		fluidd | mainsail) ;;
+		*) abort "opencreator-os/WEBUI must be fluidd or mainsail, not '$WEBUI'" ;;
+		esac
+	else
+		WEBUI=fluidd
+	fi
+	log "webui: $WEBUI"
+}
+
+# plant_stack: copy stack.tar.gz and $WEBUI.tar.gz to $OCDIR/stack (pending
+# written last). Skipped when exactly this stack and interface are installed.
+# Returns 1 on failure, logged; a failed copy leaves no stack/ nor stack.new/.
+plant_stack() {
+	ps_s=$(sums_get "$STICK/$SUMS" stack/stack.tar.gz)
+	ps_w=$(sums_get "$STICK/$SUMS" "stack/$WEBUI.tar.gz")
+	ps_key=$(printf '%s\n' "$SUMS"; printf '%s  %s\n' "$ps_s" stack.tar.gz "$ps_w" "$WEBUI.tar.gz")
+	if [ -f "$OCDIR/stack.failed" ]; then
+		log "stack: the last setup failed: $(cat "$OCDIR/stack.failed")"
+	fi
+	rm -f "$OCDIR/stack.tries" "$OCDIR/stack.failed"
+	if [ ! -f "$OCDIR/stack/pending" ] && [ "$(cat "$OCDIR/stack.installed" 2> /dev/null)" = "$ps_key" ]; then
+		log "stack: this stick's stack and $WEBUI are already installed; not planted"
+		return 0
+	fi
+	if [ "$C5_SYSTEM" = openwrt ]; then
+		# waits for a running c5-stack-setup; held until this script exits
+		exec 8> "${C5_STACK_LOCK:-/tmp/c5-stack.lock}"
+		flock 8
+	fi
+	ps_n=$OCDIR/stack.new
+	rm -rf "$ps_n"
+	ps_free=$(free_bytes "$OCDIR") || ps_free=0
+	if [ "$ps_free" -lt $((STACK_BYTES + MIN_FREE)) ]; then
+		log "stack: c5os has $((ps_free / 1048576)) MiB free; the printer software needs $(((STACK_BYTES + MIN_FREE) / 1048576)) MiB"
+		return 1
+	fi
+	ui_info stack-copy "Copying the printer software\nDo not power off."
+	mkdir -p "$ps_n" || { log "stack: cannot create $ps_n"; return 1; }
+	for ps_f in stack.tar.gz "$WEBUI.tar.gz"; do
+		if ! cp "$STICK/stack/$ps_f" "$ps_n/$ps_f"; then
+			log "stack: cannot copy $ps_f to c5os"
+			rm -rf "$ps_n"
+			return 1
+		fi
+		if [ "$(file_sum "$ps_n/$ps_f")" != "$(sums_get "$STICK/$SUMS" "stack/$ps_f")" ]; then
+			log "stack: $ps_f copy does not match $SUMS"
+			rm -rf "$ps_n"
+			return 1
+		fi
+	done
+	if ! { printf '%s  %s\n' "$ps_s" stack.tar.gz "$ps_w" "$WEBUI.tar.gz" > "$ps_n/$SUMS" &&
+		echo "$WEBUI" > "$ps_n/webui" && : > "$ps_n/pending"; }; then
+		log "stack: cannot write the stack metadata on c5os"
+		rm -rf "$ps_n"
+		return 1
+	fi
+	sync
+	if ! { rm -rf "$OCDIR/stack" && mv "$ps_n" "$OCDIR/stack"; }; then
+		log "stack: cannot move $ps_n to $OCDIR/stack"
+		rm -rf "$ps_n"
+		return 1
+	fi
+	sync
+	log "stack: planted $(printf '%s' "$ps_s" | cut -c1-12) with $WEBUI"
 }
 
 # --- eMMC backup to the stick ---------------------------------------------------
@@ -998,6 +1098,7 @@ do_swap() {
 
 do_install() {
 	retry_guard
+	if [ "$HAVE_STACK" = 1 ]; then pick_webui; fi
 	if [ "$BACKUP" = 1 ]; then bk_nonui=ok; else bk_nonui=cancel; fi
 	if ui_confirm backup 0 "Back up the eMMC to this stick first?\n${BK_NEED_MIB} MB will be written to the stick and verified (about 20 minutes on the printer). The backup includes the full-size userdata and is what tools/make-restore-stick.sh restores from." \
 		"Back up" "Skip backup" "$bk_nonui"; then
@@ -1023,7 +1124,11 @@ do_install() {
 	mkdir -p "$OCDIR" || fail "cannot create $OCDIR"
 	save_stock
 	save_settings || fail "cannot save c5os settings"
-	plant_stage2 || fail "cannot plant the second stage on c5os"
+	if [ "$HAVE_STACK" = 1 ]; then
+		plant_stack || fail "cannot copy the printer software to c5os"
+	else
+		log "stack: none on the stick; the printer software is not planted"
+	fi
 	flag_ensure_own "$OWN" || fail "cannot point the boot flag at the running slot $OWN; nothing written to slot $TGT"
 	write_slot
 	echo "written slot=$TGT kernel=$TK rootfs=$TR version=$VERSION" > "$OCDIR/install.state"
@@ -1077,6 +1182,14 @@ openwrt_main() {
 		cp -f "$STICK/sysupgrade.tar" "$img" || { rm -f "$img"; abort "cannot copy sysupgrade.tar to $img"; }
 		if [ -z "$want" ] || [ "$(sha256sum < "$img" | cut -d' ' -f1)" != "$want" ]; then
 			abort "sysupgrade.tar checksum mismatch"
+		fi
+		stack_check
+		if [ "$HAVE_STACK" = 1 ] && [ "$CHECK" = 1 ]; then
+			log "check: stack: on the stick; would ask for the web interface and plant it"
+		elif [ "$HAVE_STACK" = 1 ]; then
+			# before update_config: nothing has been written to a slot yet
+			pick_webui
+			plant_stack || abort "cannot copy the printer software to c5os"
 		fi
 		update_config /tmp/c5-repack.tgz || abort "cannot save the configuration"
 		log "update: configuration kept without the image-owned $IMAGE_OWNED"
@@ -1164,6 +1277,7 @@ else
 	log "check: c5os: would create (userdata $UD_MIB MiB -> $UD_NEW_MIB MiB, c5os $((C5OS_SIZE / 2048)) MiB at sector $C5OS_START)"
 fi
 log "check: backup: $([ "$BACKUP" = 1 ] && echo "yes ($BK_NEED_MIB MiB to $BK_DIR)" || echo "no (--backup)")"
+log "check: stack: $([ "$HAVE_STACK" = 1 ] && echo "on the stick; would ask for the web interface and copy at most $STACK_BYTES bytes to c5os" || echo "none on the stick")"
 if [ "$ACTION" = swap ]; then ck=$TK; else ck=$STICK/kernel.uimage; fi
 if [ "$TRIED" = 1 ]; then
 	log "check: afterwards: nothing (this stick already started OpenWrt, key $CL_KEY)"

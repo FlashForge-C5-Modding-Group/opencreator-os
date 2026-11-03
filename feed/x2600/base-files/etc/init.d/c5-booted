@@ -5,7 +5,10 @@
 # commit a pending upgrade, and remember this slot's tested kernel. A test
 # boot (chainloaded from stock) that is not healthy fails back to stock at
 # once (c5_test_fail); a healthy one stops its preinit deadline. A committed
-# install records last-test "ok", then the USB hook it deferred runs. Last,
+# install records last-test "ok". On a committed boot (a fresh install's test
+# boot counts once committed above) c5-stack-setup then installs the printer
+# stack a stick copied to c5os (docs/stack.md), before the USB hook this boot
+# deferred runs, so a stick's "OpenWrt installed" comes after the stack. Last,
 # 'c5-swap create' creates the c5os swap file if it is missing.
 
 START=99
@@ -67,15 +70,16 @@ c5_booted_check() {
 		c5_bootlog_show > "$logs/bootlog-last.txt"
 		sync
 	fi
+	# the printer stack a stick copied to c5os (docs/stack.md); a test boot
+	# that is not committed only proves the slot
+	if ! c5_test_boot && ! c5_nocommit; then
+		/usr/libexec/c5-stack-setup < /dev/null 2>&1 | logger -t c5-stack
+	fi
 	if [ -f /tmp/c5-usb-hook.deferred ]; then
 		rm -f /tmp/c5-usb-hook.deferred
 		/usr/libexec/c5-usb-hook now
 	fi
 	/etc/init.d/c5-swap create
-	# a test boot only proves the slot; the second stage waits for a real one
-	if ! c5_test_boot && ! c5_nocommit && [ -f "$C5_OCDIR/stage2/pending" ]; then
-		setsid sh /usr/libexec/c5-stage2 < /dev/null 2>&1 | logger -t c5-stage2 &
-	fi
 }
 
 boot() {

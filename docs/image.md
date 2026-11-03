@@ -167,6 +167,10 @@ boot without it, unless less than 64 MiB would stay free
 and before sysupgrade, so `c5os` unmounts cleanly. The file lives on `c5os`
 and survives sysupgrade.
 
+On a committed boot `c5-booted` runs `c5-stack-setup`, which installs a
+printer stack an install stick copied to `c5os`, then the USB hook it
+deferred, then `c5-swap create` (`stack.md`).
+
 `c5os` also owns all normal installer state/logs and recovery files under
 `opencreator-os/`: `stock/` holds the verified saved stock kernel/rootfs
 and checksum list, and `chainload/` holds `c5-chainload.sh`, `chainload.ko`

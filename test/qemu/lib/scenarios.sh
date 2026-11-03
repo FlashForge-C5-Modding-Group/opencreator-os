@@ -1201,7 +1201,88 @@ EOF
 	check "stock boots after old-layout migration and repair" log_has s17-stock '^QEMU-STOCK-DONE flag=ota:kernel2'
 }
 
-ALL_SCENARIOS="S1 S2 S3 S4 S5 S6 S7 S8 S9 S10 S12 S13 S14 S15 S16 S17"
+# OpenWrt step: wait until c5-stack-setup recorded the installed stack
+STACK_WAIT='run 300 stack i=0; until [ -f /data/opencreator-os/stack.installed ]; do i=$((i+1)); [ $i -lt 300 ] || exit 1; sleep 1; done; cat /data/opencreator-os/stack.installed'
+SWAP_WAIT='run 300 swap i=0; until grep -q "^/data/swapfile[[:space:]]" /proc/swaps; do i=$((i+1)); [ $i -lt 300 ] || exit 1; sleep 1; done'
+
+# S18: headless stock install with the printer stack on the stick and
+# opencreator-os/WEBUI=mainsail: the stack, Mainsail (not Fluidd) and the
+# stock calibration are copied to c5os; the committed test boot installs the
+# stack offline (docs/stack.md).
+scenario_S18() {
+	local ow=/opencreator-os p=$RUN/payload-s18 st=$RUN/s18-openwrt.steps
+	new_disk
+	make_fake_stack "$RUN/stack-s18" || { fatal "make_fake_stack failed"; return 0; }
+	data_mkdir "$DISK" /firmwareRes
+	data_mkdir "$DISK" /firmwareRes/config
+	printf '{"qemu":"extruder"}\n' > "$RUN/extruder.json"
+	data_put "$DISK" "$RUN/extruder.json" /firmwareRes/config/extruder.json || { fatal "cannot put extruder.json on userdata"; return 0; }
+	make_payload "$p" --stack "$RUN/stack-s18" || { fatal "make-install-stick.sh failed: $(tail -n 2 "$RUN/make-install-stick.log" | tr "\n" " ")"; return 0; }
+	printf 'mainsail\r\n' > "$p/opencreator-os/WEBUI"
+	make_stick "$p" "$RUN/stick-s18.img" || { fatal "make_stick failed"; return 1; }
+	steps_stock "$RUN/s18-stock.steps"
+	boot s18-stock "$DISK" "$(spl_root "$DISK")" "$RUN/s18-stock.steps" "$RUN/stick-s18.img"
+	check "stock install jumped to root=$OWRT_ROOT" is_eq "$(boot_outcome s18-stock)" "chainload:$OWRT_ROOT"
+	check "planted web interface: mainsail" is_eq "$(c5os_cat "$DISK" $ow/stack/webui)" mainsail
+	check "planted stack is pending" c5os_has "$DISK" $ow/stack/pending
+	check "Fluidd not copied" bash -c "! debugfs -R 'stat $ow/stack/fluidd.tar.gz' '$(c5os_spec "$DISK")' 2>/dev/null | grep -q '^Inode:'"
+	check "planted stack.tar.gz = the stick's" is_eq "$(c5os_cat "$DISK" $ow/stack/stack.tar.gz | sha256sum | cut -d' ' -f1)" "$(sha256sum < "$RUN/stack-s18/stack.tar.gz" | cut -d' ' -f1)"
+	check "calibration extruder.json copied to c5os" is_eq "$(c5os_cat "$DISK" $ow/calibration/extruder.json)" '{"qemu":"extruder"}'
+	check "stick log: web interface from WEBUI" bash -c "stick() { mtype -i '$RUN/stick-s18.img@@1M' ::opencreator-os-install.log; }; stick | grep -q 'webui: mainsail' && stick | grep -q 'stack: planted [0-9a-f]\{12\} with mainsail'"
+
+	steps_openwrt "$st" <<EOF
+$STACK_WAIT
+run 30 webui cat /data/printer/webui
+run 30 index cat /data/printer/www/index.html
+run 30 runs cat /data/fake-stack-runs
+run 30 ocls ls /data/opencreator-os
+$SWAP_WAIT
+EOF
+	boot_openwrt s18-openwrt "$DISK" "$(chainload_cmdline s18-stock)" "$st" "$RUN/stick-s18.img"
+	check "setup installed the stack on the committed test boot" res_ok s18-openwrt stack
+	check "installed web interface: mainsail" res_has s18-openwrt webui '^mainsail$'
+	check "Mainsail's files are the web root" res_has s18-openwrt index '^fake mainsail$'
+	check "the stack's install.sh ran once with the model" is_eq "$(res_out "$RUN/s18-openwrt.res" runs | tr -d '\r')" "run mainsail Creator5Pro 0029"
+	check "the planted stack/ is gone" bash -c "! printf '%s\n' \"\$1\" | tr -d '\r' | grep -qx stack" _ "$(res_out "$RUN/s18-openwrt.res" ocls)"
+	check "bootlog records the stack install" bash -c "printf '%s' \"\$1\" | grep -q 'stack: installed stack fake 1 with mainsail'" _ "$(img_bootlog "$DISK")"
+	check "test boot committed (flag ota:kernel)" is_eq "$(img_flag "$DISK")" ota:kernel
+}
+
+# S19: Update / Repair OpenWrt from the app with the stack on the stick: the
+# web interface menu (Mainsail), the plant before sysupgrade, and the setup
+# on the boot after the upgrade.
+scenario_S19() {
+	local ow=/opencreator-os
+	new_disk
+	prepare_committed || return 0
+	c5os_rm "$DISK" $ow/last-test  # no "OpenWrt installed" screen first
+	make_fake_stack "$RUN/stack-s19" || { fatal "make_fake_stack failed"; return 0; }
+	make_ui_payload "$RUN/payload-s19" "menu_main=1 menu_webui=2" --stack "$RUN/stack-s19" || { fatal "make-install-stick.sh failed"; return 0; }
+	make_stick "$RUN/payload-s19" "$RUN/stick-s19.img" || { fatal "make_stick failed"; return 1; }
+	cat > "$RUN/s19-update.steps" <<'EOF'
+shell 400
+expect 900 ^QEMU-UI INFO update Updating OpenWrt
+wait-exit 900
+EOF
+	boot_openwrt s19-update "$DISK" "$(spl_root "$DISK")" "$RUN/s19-update.steps" "$RUN/stick-s19.img"
+	check "Update: the web interface menu was answered with Mainsail" log_has s19-update '^QEMU-UI menu webui: 2'
+	check "Update: the stack was planted" log_has s19-update '^QEMU-UI stack: planted [0-9a-f]{12} with mainsail'
+	check "Update: the upgrade rebooted" is_eq "$(boot_outcome s19-update)" reboot
+	check "planted web interface: mainsail" is_eq "$(c5os_cat "$DISK" $ow/stack/webui)" mainsail
+	steps_openwrt "$RUN/s19-next.steps" <<EOF
+$STACK_WAIT
+run 30 webui cat /data/printer/webui
+run 30 runs cat /data/fake-stack-runs
+$SWAP_WAIT
+EOF
+	boot_openwrt s19-next "$DISK" "$(spl_root "$DISK")" "$RUN/s19-next.steps"
+	check "the boot after the upgrade installed the stack" res_ok s19-next stack
+	check "installed web interface: mainsail" res_has s19-next webui '^mainsail$'
+	check "the stack's install.sh ran once" is_eq "$(res_out "$RUN/s19-next.res" runs | tr -d '\r')" "run mainsail Creator5Pro 0029"
+}
+
+
+ALL_SCENARIOS="S1 S2 S3 S4 S5 S6 S7 S8 S9 S10 S12 S13 S14 S15 S16 S17 S18 S19"
 # the scenario whose image prepare_committed reuses (run.sh -j starts the
 # scenarios that call prepare_committed after it)
 COMMITTED_BY=S2

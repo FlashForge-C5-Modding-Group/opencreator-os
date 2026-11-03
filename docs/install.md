@@ -37,6 +37,11 @@ Everything runs from a FAT32 USB stick, inserted with the printer off.
 >   syncs, drops cached data and independently reads the USB copy back to
 >   verify its exact size and whole-partition SHA-256 (or MD5 fallback).
 >   The backup and restore format is unchanged.
+> - A stick built with `--stack` also installs the printer software
+>   (`stack.md`): the installer asks for **Fluidd** or **Mainsail** before the
+>   backup question, and OpenWrt sets it up on its first committed boot,
+>   before **OpenWrt installed** appears. It needs Kalico firmware on all
+>   four boards. Its log is `/data/opencreator-os/logs/stack.log`.
 
 ## Log in
 
@@ -61,7 +66,10 @@ Everything runs from a FAT32 USB stick, inserted with the printer off.
    Then continue as in step 7 of Install.
 5. Remove the stick.
 
-> **Note:** an update keeps Wi-Fi, passwords, SSH keys and the hostname.
+> **Notes**
+> - An update keeps Wi-Fi, passwords, SSH keys and the hostname.
+> - With a `--stack` stick, Update also asks for the web interface and
+>   installs that stack after the reboot (`stack.md`).
 
 ## Switch between OpenWrt and stock
 
@@ -95,6 +103,8 @@ If stock is damaged, the stock copy saved at install can be put back:
 > - Do the first install with the touchscreen: a headless stick never creates
 >   the `c5os` partition.
 > - Without an `ACTION` file, stock defaults to `install`; OpenWrt does nothing.
+> - A `--stack` stick installs Fluidd; `opencreator-os/WEBUI` containing
+>   `mainsail` (or `fluidd`) chooses (`stack.md`).
 > - After a failed test boot, a headless stick lets stock start instead of
 >   trying again.
 > - To see what the installer would do, SSH into stock and run (writes

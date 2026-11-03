@@ -1,0 +1,139 @@
+#!/bin/sh
+# shellcheck disable=SC1091
+# Installs the printer stack a stick copied to c5os (docs/stack.md): checks
+# the planted archives, unpacks them next to /data/printer, swaps the trees,
+# runs the stack's install.sh and restarts the stack's services. A failure
+# puts the previous tree back. Every attempt is counted before it starts;
+# after MAX_TRIES failures the plant is dropped until a stick plants again.
+# c5-booted runs it on a committed boot; the installer holds LOCK while it
+# plants.
+#
+# Overrides (host tests): C5_STACK_DIR, C5_PRINTER_DATA, C5_INITD,
+# C5_STACK_LOCK, C5_STACK_TIMEOUT, and slot.sh's C5_DATA, C5_OCDIR, C5_MOUNTS.
+
+. /lib/c5/slot.sh
+
+S=$C5_OCDIR/stack
+STACK_DIR=${C5_STACK_DIR:-$C5_DATA/printer}
+PRINTER_DATA=${C5_PRINTER_DATA:-$C5_DATA/printer_data}
+INITD=${C5_INITD:-/etc/init.d}
+LOCK=${C5_STACK_LOCK:-/tmp/c5-stack.lock}
+TIMEOUT=${C5_STACK_TIMEOUT:-600}
+MAX_TRIES=3
+SERVICES="mcu-wake klipper moonraker nginx grumpyscreen"
+LOG=$C5_OCDIR/logs/stack.log
+
+log() {
+	printf '%s\n' "$*"
+	mkdir -p "$C5_OCDIR/logs" && printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG"
+}
+
+c5_is_mountpoint "$C5_DATA" || exit 0
+[ -f "$S/pending" ] || exit 0
+exec 8> "$LOCK"
+if ! flock -n 8; then
+	log "stack: another setup is running"
+	exit 0
+fi
+
+# an earlier run stopped half-way (power loss): put its tree back first
+rm -rf "$STACK_DIR.new"
+if [ -d "$STACK_DIR.old" ]; then
+	log "stack: restoring $STACK_DIR from an interrupted setup"
+	if ! { rm -rf "$STACK_DIR" && mv "$STACK_DIR.old" "$STACK_DIR"; }; then
+		log "stack: cannot restore $STACK_DIR.old"
+		exit 1
+	fi
+fi
+
+# counted before the attempt, so a setup that crashes the printer ends too
+tries=$(cat "$C5_OCDIR/stack.tries" 2> /dev/null)
+case "$tries" in '' | *[!0-9]*) tries=0 ;; esac
+tries=$((tries + 1))
+echo "$tries" > "$C5_OCDIR/stack.tries"
+sync
+
+restart_services() {
+	for s in $SERVICES; do
+		[ ! -x "$INITD/$s" ] || "$INITD/$s" restart
+	done
+}
+
+SWAPPED=0
+fail() {
+	log "stack: setup failed (attempt $tries of $MAX_TRIES): $*"
+	c5_bootlog "stack: setup failed (attempt $tries of $MAX_TRIES): $*"
+	if [ "$SWAPPED" = 1 ]; then
+		rm -rf "$STACK_DIR"
+		[ ! -d "$STACK_DIR.old" ] || mv "$STACK_DIR.old" "$STACK_DIR"
+		restart_services
+	else
+		rm -rf "$STACK_DIR.new"
+	fi
+	if [ "$tries" -ge "$MAX_TRIES" ]; then
+		printf '%s\n' "$*" > "$C5_OCDIR/stack.failed"
+		rm -f "$S/pending"
+		log "stack: gave up after $tries failed attempts; a stick that copies the printer software again retries"
+		c5_bootlog "stack: gave up after $tries failed attempts; a stick that copies the printer software again retries"
+	fi
+	sync
+	exit 1
+}
+
+if [ -f "$S/SHA256SUMS" ]; then sums=SHA256SUMS tool=sha256sum; else sums=MD5SUMS tool=md5sum; fi
+(cd "$S" && $tool -c "$sums") > /dev/null 2>&1 || fail "the copied archives do not match their checksums"
+webui=$(cat "$S/webui" 2> /dev/null)
+case "$webui" in fluidd | mainsail) ;; *) fail "bad web interface choice" ;; esac
+[ -f "$S/$webui.tar.gz" ] || fail "bad web interface choice"
+
+log "stack: unpacking to $STACK_DIR.new ($webui)"
+mkdir -p "$STACK_DIR.new/www" || fail "cannot create $STACK_DIR.new"
+if ! tar -xzf "$S/stack.tar.gz" -C "$STACK_DIR.new" >> "$LOG" 2>&1; then
+	log "stack: $(df -k "$C5_DATA" | tail -n 1)"
+	fail "cannot unpack stack.tar.gz"
+fi
+if ! tar -xzf "$S/$webui.tar.gz" -C "$STACK_DIR.new/www" >> "$LOG" 2>&1; then
+	log "stack: $(df -k "$C5_DATA" | tail -n 1)"
+	fail "cannot unpack $webui.tar.gz"
+fi
+echo "$webui" > "$STACK_DIR.new/webui" || fail "cannot write $STACK_DIR.new/webui"
+[ -f "$STACK_DIR.new/install.sh" ] || fail "stack.tar.gz has no install.sh"
+
+if [ -d "$STACK_DIR" ]; then
+	mv "$STACK_DIR" "$STACK_DIR.old" || fail "cannot move $STACK_DIR aside"
+fi
+mv "$STACK_DIR.new" "$STACK_DIR" || fail "cannot move $STACK_DIR.new into place"
+SWAPPED=1
+sync
+
+# busybox has no timeout(1): a watchdog kills install.sh after TIMEOUT s
+log "stack: running install.sh"
+C5_MODEL_FILE=$C5_OCDIR/model C5_CALIBRATION_DIR=$C5_OCDIR/calibration C5_PRINTER_DATA=$PRINTER_DATA \
+	sh "$STACK_DIR/install.sh" "$STACK_DIR" >> "$LOG" 2>&1 &
+pid=$!
+(
+	sleep "$TIMEOUT" &
+	sl=$!
+	trap 'kill $sl; exit 0' TERM
+	wait $sl
+	log "stack: install.sh still running after $TIMEOUT s; killing it"
+	kill "$pid"
+) > /dev/null 2>&1 &
+wd=$!
+wait "$pid"
+rc=$?
+kill "$wd" 2> /dev/null
+[ "$rc" = 0 ] || fail "install.sh exited $rc"
+
+restart_services
+rm -rf "$STACK_DIR.old"
+if ! { { printf '%s\n' "$sums" && cat "$S/$sums"; } > "$C5_OCDIR/stack.installed.new" &&
+	mv -f "$C5_OCDIR/stack.installed.new" "$C5_OCDIR/stack.installed"; }; then
+	log "stack: cannot record the installed stack"
+fi
+rm -f "$C5_OCDIR/stack.tries" "$C5_OCDIR/stack.failed"
+rm -rf "$S"
+sync
+log "stack: installed $(head -n 1 "$STACK_DIR/VERSION" 2> /dev/null) with $webui"
+c5_bootlog "stack: installed $(head -n 1 "$STACK_DIR/VERSION" 2> /dev/null) with $webui"
+exit 0

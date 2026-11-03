@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Assemble the opencreator-os USB-stick payload from a build directory.
 #
-#   tools/make-install-stick.sh [--authorized-keys FILE] [--app FILE] VERSION_DIR OUTDIR
+#   tools/make-install-stick.sh [--authorized-keys FILE] [--app FILE] [--stack DIR] VERSION_DIR OUTDIR
 #
 # VERSION_DIR  build output, e.g. /mnt/f/creator5-dev/opencreator-os-builds/<ver>,
 #              holding opencreator-os-x2600-generic-flashforge_creator5pro-*
@@ -9,18 +9,21 @@
 # --authorized-keys FILE  ship FILE as the SSH keys for OpenWrt's root
 # --app FILE   ship the os-installer touchscreen app (os-installer/build/mips32/os-installer);
 #              without it the stick runs headless
+# --stack DIR  ship the printer stack: DIR holds stack.tar.gz, fluidd.tar.gz and
+#              mainsail.tar.gz (tools/make-stack.sh); without it the stick
+#              installs OpenWrt only
 #
 # chainload.ko comes from chainload/out/ of this repo (chainload/build.sh),
 # sfdisk and partx from installer/tools/out/ (installer/tools/build.sh).
-# ACTION, wifi.conf and authorized_keys are left out of the checksum lists so
-# they can be added or edited on the stick later.
+# ACTION, WEBUI, wifi.conf and authorized_keys (in opencreator-os/) are left
+# out of the checksum lists so they can be added or edited on the stick later.
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 PREFIX=opencreator-os-x2600-generic-flashforge_creator5pro-squashfs
-KEYS='' APP=''
+KEYS='' APP='' STACK=''
 
-usage() { sed -n '2,16s/^# \{0,1\}//p' "$0"; }
+usage() { sed -n '2,19s/^# \{0,1\}//p' "$0"; }
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -32,6 +35,11 @@ while [ $# -gt 0 ]; do
 	--app)
 		[ $# -ge 2 ] || { usage >&2; exit 2; }
 		APP=$2
+		shift
+		;;
+	--stack)
+		[ $# -ge 2 ] || { usage >&2; exit 2; }
+		STACK=$2
 		shift
 		;;
 	-h | --help) usage; exit 0 ;;
@@ -57,6 +65,13 @@ for f in installer/runFirmwareExe.sh installer/opencreator-os/install.sh install
 done
 [ -z "$KEYS" ] || [ -s "$KEYS" ] || die "authorized keys file $KEYS is empty or missing"
 [ -z "$APP" ] || [ -s "$APP" ] || die "app $APP is empty or missing"
+if [ -n "$STACK" ]; then
+	for a in stack.tar.gz fluidd.tar.gz mainsail.tar.gz; do
+		[ -s "$STACK/$a" ] || die "stack archive $STACK/$a is empty or missing"
+	done
+else
+	echo "make-install-stick: no --stack: the stick installs OpenWrt without the printer software (tools/make-stack.sh)" >&2
+fi
 if [ -e "$OUT" ] && [ -n "$(ls -A "$OUT")" ]; then
 	die "$OUT exists and is not empty"
 fi
@@ -86,13 +101,16 @@ mkdir -p "$OUT/opencreator-os/bin" "$OUT/chainload"
 install -m 0755 "$REPO/installer/runFirmwareExe.sh" "$OUT/"
 install -m 0755 "$REPO/installer/opencreator-os/install.sh" "$OUT/opencreator-os/"
 install -m 0644 "$REPO/installer/opencreator-os/lib.sh" "$REPO/installer/opencreator-os/restore.sh" \
-	"$REPO/installer/opencreator-os/stage2.sh" \
 	"$REPO/feed/x2600/base-files/lib/c5/slot.sh" "$OUT/opencreator-os/"
 install -m 0755 "$REPO/installer/tools/out/sfdisk" "$REPO/installer/tools/out/partx" "$OUT/opencreator-os/bin/"
 [ -z "$APP" ] || install -m 0755 "$APP" "$OUT/opencreator-os/os-installer"
 for a in kernel.uimage root.squashfs sysupgrade.tar; do
 	install -m 0644 "$VDIR/$PREFIX-$a" "$OUT/$a"
 done
+if [ -n "$STACK" ]; then
+	mkdir -p "$OUT/stack"
+	install -m 0644 "$STACK/stack.tar.gz" "$STACK/fluidd.tar.gz" "$STACK/mainsail.tar.gz" "$OUT/stack/"
+fi
 install -m 0644 "$REPO/chainload/out/chainload.ko" "$OUT/chainload/"
 install -m 0755 "$REPO/chainload/c5-chainload.sh" "$OUT/chainload/"
 basename "$(cd "$VDIR" && pwd)" > "$OUT/VERSION"
