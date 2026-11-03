@@ -82,8 +82,24 @@ Kernel, package and base-file configuration. For building, see `build.md`.
 ## Packages
 
 Packages are built from source with musl and hard-float for `mipsel_mips32`.
-Do not install downloads.openwrt.org's `mipsel_mips32` packages: they are
-soft-float and will not run.
+
+Plain `opkg` has no feed: downloads.openwrt.org's `mipsel_mips32` packages are
+soft-float and must not land in the image's `/usr/lib`, and nothing hosts
+hard-float packages yet.
+
+For soft-float packages use `opkg-sf` (`opkg-sf update`, `opkg-sf install htop`),
+which `build.sh` adds:
+
+- Everything goes under `/data/sf` with its own package database, `libc` and
+  `libgcc`. Upstream's `bcm47xx/legacy` target provides those two.
+- `/etc/ld-musl-mipsel-sf.path` limits soft-float programs to `/data/sf`, and
+  hard-float programs never look there. Only the loader,
+  `/lib/ld-musl-mipsel-sf.so.1`, is in the image.
+- `/etc/profile.d/sf.sh` appends the area to `PATH`, so hard-float commands win.
+- A package that expects its files under `/usr` needs telling where they are,
+  for example `PYTHONHOME=/data/sf/usr` for Python.
+- Kernel modules from those feeds will not load, and Kalico and Moonraker must
+  stay hard-float.
 
 Packages come from `DEFAULT_PACKAGES` in `feed/x2600/Makefile` (plus
 `config/openwrt.seed`); the target drops OpenWrt's default `mtd` and `urngd`:
@@ -110,6 +126,7 @@ Packages come from `DEFAULT_PACKAGES` in `feed/x2600/Makefile` (plus
   address when plugged in. Adapters registering as `usb0`, such as CDC
   devices with locally administered MACs, are not configured.
 - Camera: `kmod-video-uvc` for the internal UVC camera (`05a3:9230`).
+- `curl`, in addition to OpenWrt's default `uclient-fetch`.
 
 ## Base files
 

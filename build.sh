@@ -13,6 +13,8 @@ WORK=${WORK:-$HOME/build/opencreator-os}
 OUT=${OUT:-/mnt/f/creator5-dev/opencreator-os-builds}
 JOBS=${JOBS:-$(nproc)}
 OPENWRT_TAG=v24.10.8
+SF_LIBC_URL=https://downloads.openwrt.org/releases/24.10.8/targets/bcm47xx/legacy/packages/libc_1.2.5-r4_mipsel_mips32.ipk
+SF_LIBC_SHA256=deae570efba1fa287005320325d1878db32c935213b613a9b46324069975dc2e
 OW=$WORK/openwrt
 
 log() { printf '\n=== %s\n' "$*"; }
@@ -74,6 +76,55 @@ mkdir -p "$OW/target/linux/x2600"
 find "$OW/target/linux/x2600" -type d -exec chmod 0755 {} + -o -type f -exec chmod 0644 {} +
 git -C "$REPO" ls-files -s feed/x2600 | awk '$1 == "100755" { sub(/^feed\/x2600\//, "", $4); print $4 }' |
 	while IFS= read -r f; do [ ! -e "$OW/target/linux/x2600/$f" ] || chmod 0755 "$OW/target/linux/x2600/$f"; done
+
+# The soft-float area: opkg-sf installs upstream's mipsel_mips32 packages under
+# /data/sf, apart from the image (docs/image.md). Only the loader, whose path is
+# fixed in those binaries, sits in /lib.
+log "soft-float area"
+SF_IPK=$WORK/libc-sf-$SF_LIBC_SHA256.ipk
+if [ ! -s "$SF_IPK" ]; then
+	wget -q -O "$SF_IPK.part" "$SF_LIBC_URL" || die "cannot download $SF_LIBC_URL"
+	[ "$(sha256sum < "$SF_IPK.part" | cut -d' ' -f1)" = "$SF_LIBC_SHA256" ] || die "soft-float libc checksum mismatch"
+	mv -f "$SF_IPK.part" "$SF_IPK"
+fi
+mkdir -p "$OW/files/lib" "$OW/files/etc/profile.d" "$OW/files/usr/sbin"
+tar -xzOf "$SF_IPK" ./data.tar.gz | tar -xzOf - ./lib/libc.so > "$OW/files/lib/ld-musl-mipsel-sf.so.1"
+chmod 0755 "$OW/files/lib/ld-musl-mipsel-sf.so.1"
+echo /data/sf/lib:/data/sf/usr/lib > "$OW/files/etc/ld-musl-mipsel-sf.path"
+SF_URL=https://downloads.openwrt.org/releases/${OPENWRT_TAG#v}
+cat > "$OW/files/etc/opkg-sf.conf" <<EOF
+dest root /
+lists_dir ext /var/opkg-lists-sf
+option check_signature
+arch all 100
+arch mipsel_mips32 200
+src/gz sf_core $SF_URL/targets/bcm47xx/legacy/packages
+src/gz sf_base $SF_URL/packages/mipsel_mips32/base
+src/gz sf_packages $SF_URL/packages/mipsel_mips32/packages
+src/gz sf_luci $SF_URL/packages/mipsel_mips32/luci
+src/gz sf_routing $SF_URL/packages/mipsel_mips32/routing
+src/gz sf_telephony $SF_URL/packages/mipsel_mips32/telephony
+EOF
+cat > "$OW/files/usr/sbin/opkg-sf" <<EOF
+#!/bin/sh
+grep -q ' /data ' /proc/mounts || { echo "opkg-sf: /data is not mounted" >&2; exit 1; }
+mkdir -p /data/sf/var/lock /data/sf/etc/opkg
+[ -e /data/sf/etc/opkg/keys ] || ln -s /etc/opkg/keys /data/sf/etc/opkg/keys
+sf() { opkg -f /etc/opkg-sf.conf -o /data/sf "\$@"; }
+# upstream's index leaves libc out, as every image already has it
+if [ "\$1" = install ] && [ ! -e /data/sf/lib/libc.so ]; then
+	curl -fsSL -o /tmp/sf-libc.ipk "$SF_LIBC_URL" || exit 1
+	[ "\$(sha256sum < /tmp/sf-libc.ipk | cut -d' ' -f1)" = "$SF_LIBC_SHA256" ] || { echo "opkg-sf: libc checksum mismatch" >&2; exit 1; }
+	sf install /tmp/sf-libc.ipk || exit 1
+	rm -f /tmp/sf-libc.ipk
+fi
+sf "\$@"
+EOF
+chmod 0755 "$OW/files/usr/sbin/opkg-sf"
+cat > "$OW/files/etc/profile.d/sf.sh" <<'EOF'
+export PATH="$PATH:/data/sf/usr/sbin:/data/sf/usr/bin:/data/sf/sbin:/data/sf/bin"
+export TERMINFO_DIRS=/data/sf/usr/share/terminfo:/usr/share/terminfo
+EOF
 
 # feeds.conf.default pins each feed to a commit of the release: update the
 # feeds whenever the checked-out tag changes.

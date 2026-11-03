@@ -36,7 +36,7 @@ DEFAULT_PACKAGES += dropbear block-mount partx-utils e2fsprogs \
 	kmod-usb-net-asix kmod-usb-net-asix-ax88179 \
 	kmod-video-core kmod-video-uvc \
 	wpa-supplicant-mbedtls kmod-rtw88-8821cu rtl8821ce-firmware iwinfo \
-	openssh-sftp-server
+	openssh-sftp-server curl
 
 # The SPL boots with init=/linuxrc.
 define Package/base-files/install-target
