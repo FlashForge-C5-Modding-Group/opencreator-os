@@ -472,7 +472,7 @@ boot() {
 	# QEMU's sd-card reads and writes the image one 512-byte block at a time,
 	# synchronously; io_uring makes each of those about twice as fast as the
 	# default thread pool (S12's whole-eMMC backup is bound by it).
-	q=(qemu-system-mipsel -M malta -cpu "$QEMU_CPU" -m "$QEMU_MEM" -kernel "$VMLINUX"
+	q=(qemu-system-mipsel -M malta -cpu "$QEMU_CPU" -smp "$QEMU_SMP" -m "$QEMU_MEM" -kernel "$VMLINUX"
 		-append "$cl"
 		-display none -monitor none -serial stdio -no-reboot
 		-drive "if=none,id=emmc,file=$disk,format=raw,aio=$QEMU_AIO${QEMU_CACHE:+,cache=$QEMU_CACHE}"

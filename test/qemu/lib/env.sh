@@ -8,6 +8,8 @@
 #   STOCK_ROOTFS_PATH  path of the extracted stock 2.0.0 rootfs inside it
 #   KVER           mainline Linux version for the QEMU kernel
 #   QEMU_CPU       QEMU CPU model (must run stock NaN2008 glibc and OpenWrt musl)
+#   QEMU_SMP       CPU threads per VM (1; 2 selects the 34Kf CPU)
+#   QEMU_MEM       memory per VM, MiB
 #   QEMU_AIO       QEMU drive aio= backend (io_uring; threads if QEMU lacks it)
 #   CROSS_COMPILE  toolchain prefix for the QEMU kernel
 #   STAGING_DIR    target staging directory for an OpenWrt compiler (auto if empty)
@@ -38,13 +40,16 @@ STOCK_ARCHIVE=${STOCK_ARCHIVE:-/mnt/f/creator5-dev/creator-5-pro-firmware-archiv
 STOCK_ROOTFS_PATH=${STOCK_ROOTFS_PATH:-kernel/ota_kernel_emmc/ota_v1/rootfs_extracted}
 KVER=${KVER:-6.6.58}
 KSHA256=${KSHA256:-e7df81e588d70fab5ec3ec3bb04ac53d51f0860fc3b1ec45e0a4167a026899db}
-# 24Kf: MIPS32r2 + 64-bit FPU (FR switchable). The stock userland is
-# NaN2008/FP64 and OpenWrt's is legacy-NaN; with ieee754=relaxed (passed on
+# 24Kf: MIPS32r2 + 64-bit FPU (FR switchable), in stock QEMU. The stock userland
+# is NaN2008/FP64 and OpenWrt's is legacy-NaN; with ieee754=relaxed (passed on
 # every boot, built into the product kernel) the kernel runs both. P5600 (the
 # NaN2008 model) reads corrupt data from every block device under this
 # kernel (squashfs "decompression failed", even uncompressed images fault).
-QEMU_CPU=${QEMU_CPU:-24Kf}
-QEMU_MEM=${QEMU_MEM:-256}
+# One CPU thread by default: with 2, guests stall intermittently (RCU). More
+# threads need 34Kf, the MT model, as 24Kf can't bring up a second CPU.
+QEMU_SMP=${QEMU_SMP:-1}
+if [ "$QEMU_SMP" -gt 1 ]; then QEMU_CPU=${QEMU_CPU:-34Kf}; else QEMU_CPU=${QEMU_CPU:-24Kf}; fi
+QEMU_MEM=${QEMU_MEM:-512}
 QEMU_AIO=${QEMU_AIO:-io_uring}
 # The product kernel's built-in command-line prefix (CONFIG_CMDLINE in
 # kernel/creator5pro.config, put in front of the SPL's argv); the QEMU

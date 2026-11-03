@@ -122,8 +122,13 @@ Test-only deviations outside product code:
   pending behind the stall.
 - `kernel/build.sh` patches the Malta DT compatible and accepts Malta
   in any compatible entry.
-- CPU `24Kf` is MIPS32r2 with a 64-bit FPU. `ieee754=relaxed` supports
-  both stock NaN2008/FP64 and OpenWrt legacy-NaN userland.
+- CPU `24Kf` is MIPS32r2 with a 64-bit FPU, one thread, in stock QEMU: no
+  patched build is needed. `ieee754=relaxed` supports both stock NaN2008/FP64
+  and OpenWrt legacy-NaN userland. Each VM has 512 MiB (`QEMU_MEM`), above
+  Malta's 256 MiB of low memory through `CONFIG_HIGHMEM`.
+- `QEMU_SMP=2` gives a VM two threads, closer to the printer, and switches the
+  CPU to `34Kf`, the MT model (`24Kf` doesn't boot with `-smp 2`). Guests then
+  stall intermittently (RCU), whatever the CPU model, so it isn't the default.
   Do not use `P5600`: block-device reads are corrupt under this kernel.
 
 ## Scenarios
