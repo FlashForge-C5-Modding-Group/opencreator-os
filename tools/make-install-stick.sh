@@ -86,6 +86,7 @@ mkdir -p "$OUT/opencreator-os/bin" "$OUT/chainload"
 install -m 0755 "$REPO/installer/runFirmwareExe.sh" "$OUT/"
 install -m 0755 "$REPO/installer/opencreator-os/install.sh" "$OUT/opencreator-os/"
 install -m 0644 "$REPO/installer/opencreator-os/lib.sh" "$REPO/installer/opencreator-os/restore.sh" \
+	"$REPO/installer/opencreator-os/stage2.sh" \
 	"$REPO/feed/x2600/base-files/lib/c5/slot.sh" "$OUT/opencreator-os/"
 install -m 0755 "$REPO/installer/tools/out/sfdisk" "$REPO/installer/tools/out/partx" "$OUT/opencreator-os/bin/"
 [ -z "$APP" ] || install -m 0755 "$APP" "$OUT/opencreator-os/os-installer"

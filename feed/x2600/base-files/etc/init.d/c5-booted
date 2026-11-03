@@ -72,6 +72,10 @@ c5_booted_check() {
 		/usr/libexec/c5-usb-hook now
 	fi
 	/etc/init.d/c5-swap create
+	# a test boot only proves the slot; the second stage waits for a real one
+	if ! c5_test_boot && ! c5_nocommit && [ -f "$C5_OCDIR/stage2/pending" ]; then
+		setsid sh /usr/libexec/c5-stage2 < /dev/null 2>&1 | logger -t c5-stage2 &
+	fi
 }
 
 boot() {

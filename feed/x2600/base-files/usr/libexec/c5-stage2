@@ -1,0 +1,20 @@
+#!/bin/sh
+# shellcheck disable=SC1091
+# Runs the second stage the installer planted on c5os (docs/stage2.md), after a
+# stick's USB hook is done with the screen. Without a screen or touch (app
+# status 3, or no app) it runs headless.
+
+. /lib/c5/slot.sh
+
+D=$C5_OCDIR/stage2
+[ -f "$D/pending" ] || exit 0
+
+exec 9> /tmp/c5-usb-hook.lock
+flock 9
+
+mkdir -p "$C5_OCDIR/logs"
+if [ -x "$D/os-installer" ]; then
+	"$D/os-installer" --log "$C5_OCDIR/logs/stage2-ui.log" -- sh "$D/stage2.sh" --ui
+	[ $? = 3 ] || exit 0
+fi
+sh "$D/stage2.sh" < /dev/null

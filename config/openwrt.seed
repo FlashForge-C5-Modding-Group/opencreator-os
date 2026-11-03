@@ -18,6 +18,21 @@ CONFIG_VERSION_HOME_URL="https://github.com/FlashForge-C5-Modding-Group/opencrea
 CONFIG_PACKAGE_wpa-supplicant-mbedtls=y
 CONFIG_PACKAGE_kmod-rtw88-8821cu=y
 CONFIG_PACKAGE_rtl8821ce-firmware=y
+# Not in the image: tools/make-stack.sh packs these for the second stage.
+CONFIG_PACKAGE_python3=m
+CONFIG_PACKAGE_python3-pyserial=m
+CONFIG_PACKAGE_python3-cffi=m
+CONFIG_PACKAGE_python3-greenlet=m
+CONFIG_PACKAGE_python3-jinja2=m
+CONFIG_PACKAGE_python3-markupsafe=m
+CONFIG_PACKAGE_python3-numpy=m
+CONFIG_PACKAGE_python3-tornado=m
+CONFIG_PACKAGE_python3-pillow=m
+CONFIG_PACKAGE_python3-distro=m
+CONFIG_PACKAGE_python3-zeroconf=m
+CONFIG_PACKAGE_python3-dbus-fast=m
+CONFIG_PACKAGE_libsodium=m
+CONFIG_PACKAGE_nginx-ssl=m
 # The vendor kernel tree has warnings that -Werror turns into failures.
 # CONFIG_KERNEL_WERROR is not set
 # OpenWrt kernel defaults turned off: Multipath TCP (unused), and RT group

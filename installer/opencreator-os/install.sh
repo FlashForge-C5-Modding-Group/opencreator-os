@@ -359,6 +359,27 @@ save_settings() {
 	sync
 }
 
+# plant_stage2: the second stage, for OpenWrt's first real boot (docs/stage2.md).
+# A printer that already finished it or declined keeps its choice on a reinstall.
+plant_stage2() {
+	s2=$OCDIR/stage2
+	if [ -f "$s2/done" ] || [ -f "$s2/declined" ]; then
+		log "stage2: already handled; not planted"
+		return 0
+	fi
+	mkdir -p "$s2" || return 1
+	cp "$SELF_DIR/stage2.sh" "$SELF_DIR/lib.sh" "$SELF_DIR/slot.sh" "$s2/" || return 1
+	if [ -f "$SELF_DIR/os-installer" ]; then
+		cp "$SELF_DIR/os-installer" "$s2/" && chmod 755 "$s2/os-installer" || return 1
+	fi
+	if [ -s "$STICK/opencreator-os/manifest-url" ]; then
+		cp "$STICK/opencreator-os/manifest-url" "$s2/" || return 1
+	fi
+	: > "$s2/pending" || return 1
+	sync
+	log "stage2: planted"
+}
+
 # c5os_do OPTS CMD...: run CMD with c5os mounted at $C5M with OPTS (the
 # *_in functions run only through it: SC2317)
 c5os_do() (
@@ -1002,6 +1023,7 @@ do_install() {
 	mkdir -p "$OCDIR" || fail "cannot create $OCDIR"
 	save_stock
 	save_settings || fail "cannot save c5os settings"
+	plant_stage2 || fail "cannot plant the second stage on c5os"
 	flag_ensure_own "$OWN" || fail "cannot point the boot flag at the running slot $OWN; nothing written to slot $TGT"
 	write_slot
 	echo "written slot=$TGT kernel=$TK rootfs=$TR version=$VERSION" > "$OCDIR/install.state"
