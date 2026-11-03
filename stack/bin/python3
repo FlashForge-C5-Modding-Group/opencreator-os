@@ -1,0 +1,5 @@
+#!/bin/sh
+# The stack's Python (Klippy's gcode_shell_command scripts call it).
+# shellcheck source-path=SCRIPTDIR source=env.sh
+. "$(dirname "$0")/env.sh"
+exec "$PY" "$@"

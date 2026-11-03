@@ -90,14 +90,32 @@ The app uses the toolchain installed by step 3. If you exported a custom
 (cd ../os-installer && make mips32)
 ```
 
-## 6. Assemble the stick
+## 6. Build the printer stack (optional)
+
+The stack (`stack.md`) packs Kalico, Moonraker with the procd provider and
+opencreator-fs's configuration from checkouts next to this repo
+(`../kalico`, `../moonraker-procd`, `../opencreator-fs`; each checkout's
+`HEAD`), plus the OpenWrt packages `./build.sh` built:
+
+```sh
+tools/make-stack.sh ~/build/opencreator-os/stack-out
+```
+
+`--kalico DIR`, `--moonraker DIR` and `--opencreator-fs DIR` choose other
+checkouts. Downloads pinned in `stack/sources.txt` are cached in
+`~/build/opencreator-os/stack-dl`.
+
+## 7. Assemble the stick
 
 ```sh
 tools/make-install-stick.sh --app ../os-installer/build/mips32/os-installer \
+    --stack ~/build/opencreator-os/stack-out \
     "$OUT/$(git describe --always --dirty --tags)" stick/
 ```
 
-## 7. Copy to a USB stick
+Leave out `--stack` for a stick that installs OpenWrt only.
+
+## 8. Copy to a USB stick
 
 Copy the contents of `stick/` to the root of a FAT32 stick (16 GB to fit the
 installer's eMMC backup), then check it from the stick's root:
@@ -125,6 +143,13 @@ or assemble the install stick. The first run builds a separate test kernel.
 
 ```sh
 OWRT_BUILDS=$OUT test/qemu/run.sh -j 8
+```
+
+S20 installs a real stack when `QEMU_STACK` names a `tools/make-stack.sh`
+output directory, and is skipped otherwise:
+
+```sh
+OWRT_BUILDS=$OUT QEMU_STACK=~/build/opencreator-os/stack-out test/qemu/run.sh S20
 ```
 
 ## Changing the kernel config

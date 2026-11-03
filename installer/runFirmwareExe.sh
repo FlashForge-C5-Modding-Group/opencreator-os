@@ -12,6 +12,8 @@
 # OpenWrt's kernel shows its boot log on the panel (fbcon): unbind fbcon while
 # the app owns /dev/fb0 so console text and cursor stay off its screens, bind
 # it again when the app exits. Stock has no fbcon, so nothing changes there.
+# On OpenWrt the printer stack's GrumpyScreen (docs/stack.md) also draws on
+# /dev/fb0: it is stopped for the app and started again after it.
 S=$(dirname "$0")
 T=/tmp/c5os
 fbcon_bind() {
@@ -36,10 +38,16 @@ if [ -x "$T/os-installer" ]; then
 			i=$((i + 1))
 		done
 	fi
+	gs=0
+	if [ -x /etc/init.d/grumpyscreen ]; then
+		gs=1
+		/etc/init.d/grumpyscreen stop
+	fi
 	fbcon_bind 0
 	"$T/os-installer" --log "$S/os-installer.log" -- sh "$T/install.sh" --from-stick "$S" --hook --ui "$@"
 	rc=$?
 	fbcon_bind 1
+	[ "$gs" = 0 ] || /etc/init.d/grumpyscreen start
 	[ "$rc" = 3 ] || exit "$rc"
 fi
 exec sh "$T/install.sh" --from-stick "$S" --hook "$@"

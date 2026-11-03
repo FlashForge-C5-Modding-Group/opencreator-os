@@ -13,6 +13,7 @@
 #   QEMU_AIO       QEMU drive aio= backend (io_uring; threads if QEMU lacks it)
 #   CROSS_COMPILE  toolchain prefix for the QEMU kernel
 #   STAGING_DIR    target staging directory for an OpenWrt compiler (auto if empty)
+#   QEMU_STACK     tools/make-stack.sh output directory; S20 installs it (SKIP without)
 
 QREPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 QDIR=$QREPO/test/qemu

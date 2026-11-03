@@ -1,0 +1,7 @@
+#!/bin/sh
+# Moonraker, run by /etc/init.d/moonraker.
+# shellcheck source-path=SCRIPTDIR source=env.sh
+. "$(dirname "$0")/env.sh"
+mkdir -p /data/printer_data/tmp
+export TMPDIR=/data/printer_data/tmp
+exec "$PY" "$P/moonraker/moonraker/moonraker.py" -d /data/printer_data

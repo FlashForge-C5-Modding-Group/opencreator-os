@@ -1,0 +1,14 @@
+#!/bin/sh
+# Klippy (Kalico), run by /etc/init.d/klipper.
+# shellcheck source-path=SCRIPTDIR source=env.sh
+. "$(dirname "$0")/env.sh"
+C=/data/printer_data/config
+# AFC reads its unit state file at startup and fails on an empty one
+if [ -d "$C/AFC" ] && [ ! -s "$C/AFC/AFC.var.unit" ]; then
+	echo '{}' > "$C/AFC/AFC.var.unit"
+fi
+NICE=
+if nice -n -20 true 2> /dev/null; then NICE="nice -n -20"; fi
+# shellcheck disable=SC2086  # NICE is a command prefix or nothing
+exec $NICE "$PY" "$P/klipper/klippy/klippy.py" "$C/printer.cfg" \
+	-l /data/printer_data/logs/klippy.log -a /data/printer_data/comms/klippy.sock

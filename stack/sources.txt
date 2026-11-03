@@ -1,0 +1,8 @@
+grumpyscreen 76341b16ea520f0ca86c0a7a9bffcb4cc6ec5ec463f63623ab7c0afd8e3bd686 https://github.com/FlashForge-C5-Modding-Group/grumpyscreen/releases/download/0.0.3/grumpyscreen
+fluidd.zip e45889071dae4e79f22e38bfb28cad0ce0c89e134c09d174cd447c4c93bd9556 https://github.com/fluidd-core/fluidd/releases/download/v1.37.7/fluidd.zip
+mainsail.zip c4d9d96f89851c6ae0709c2f20725447f3fe8c57cf193869b0083441bd93378a https://github.com/mainsail-crew/mainsail/releases/download/v2.19.0/mainsail.zip
+streaming-form-data-1.11.0.tar.gz 202cea84200e8d412dd22b3ae522e1896a8a7d041aae809278b003b64ed1712b https://files.pythonhosted.org/packages/2c/6c/a6666cadf14b7bcb27f214a2325b9c72a35a0f3f34fbcda3890e53488468/streaming-form-data-1.11.0.tar.gz
+zipp-3.20.2-py3-none-any.whl a817ac80d6cf4b23bf7f2828b7cabf326f15a001bea8b1f9b49631780ba28350 https://files.pythonhosted.org/packages/62/8b/5ba542fa83c90e09eac972fc9baca7a88e7e7ca4b221a89251954019308b/zipp-3.20.2-py3-none-any.whl
+importlib_metadata-8.5.0-py3-none-any.whl 45e54197d28b7a7f1559e60b95e7c567032b602131fbd588f1497f47880aa68b https://files.pythonhosted.org/packages/a0/d9/a1e041c5e7caa9a05c925f4bdbdfb7f006d1f74996af53467bc394c97be7/importlib_metadata-8.5.0-py3-none-any.whl
+inotify_simple-2.0.1-py3-none-any.whl e5da495f2064889f8e68b67f9358b0d102e03b783c2d42e5b8e132ab859a5d8a https://files.pythonhosted.org/packages/e3/86/8be1ac7e90f80b413e81f1e235148e8db771218886a2353392f02da01be3/inotify_simple-2.0.1-py3-none-any.whl
+libnacl-2.1.0-py3-none-any.whl a8546b221afe8b72b6a9f298cd92a4c1f90570d7b5baa295acb1913644e230a5 https://files.pythonhosted.org/packages/ad/ce/85fa0276de7303b44fef63e07c14d618b8630bbe41c7dd7e34db246eab8d/libnacl-2.1.0-py3-none-any.whl

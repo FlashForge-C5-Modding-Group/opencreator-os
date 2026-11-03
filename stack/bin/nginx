@@ -1,0 +1,7 @@
+#!/bin/sh
+# nginx in the foreground, run by /etc/init.d/nginx.
+# shellcheck source-path=SCRIPTDIR source=env.sh
+. "$(dirname "$0")/env.sh"
+mkdir -p /data/printer_data/nginx /data/printer_data/logs
+exec "$P/root/usr/sbin/nginx" -p /data/printer_data/nginx/ -c "$P/etc/nginx.conf" \
+	-e /data/printer_data/logs/nginx-error.log -g 'daemon off;'

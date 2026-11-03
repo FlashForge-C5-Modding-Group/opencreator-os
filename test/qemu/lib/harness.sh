@@ -333,8 +333,13 @@ build_openwrt_fixture() (
 			fi
 		done || return 1
 		chmod 0755 "$stage/etc/init.d/c5-usb-hook" "$stage/usr/libexec/c5-usb-hook" || return 1
-		ln -sf ../init.d/c5-usb-hook "$stage/etc/rc.d/S19c5-usb-hook" || return 1
-		for f in "$stage"/etc/rc.d/*c5*; do
+		# rc.d links as base-files' postinst makes them for every image init script
+		for f in "$QREPO"/feed/x2600/base-files/etc/init.d/*; do
+			s=$(sed -n 's/^START=//p' "$f" | head -n 1)
+			[ -n "$s" ] || continue
+			ln -sf "../init.d/${f##*/}" "$stage/etc/rc.d/S$s${f##*/}" || return 1
+		done
+		for f in "$stage"/etc/rc.d/*; do
 			if [ ! -e "$f" ]; then rm -f "$f" || return 1; fi
 		done
 		# the QEMU kernel's usbnet/cdc_ether (kernel/build.sh): the image's

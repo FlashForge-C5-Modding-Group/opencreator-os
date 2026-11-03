@@ -118,3 +118,85 @@ C5_MODEL_FILE=/data/opencreator-os/model C5_CALIBRATION_DIR=/data/opencreator-os
 
 It must be idempotent, write only under those two directories, start or
 stop no services, finish within 600 s and exit 0 on success.
+
+`stack/install.sh` (this repo) creates those directories and
+`grumpyscreen/thumbnails`, copies each file of `defaults/config/` that is
+missing from `config/` (existing files are kept, so new defaults of a later
+stack stay in `/data/printer/defaults/config` until copied by hand), copies
+stock's calibration files to `config/calibration/` where missing, rewrites
+`config/printer.model.cfg` from the model (`Creator5Pro`, `Creator5`, or
+unknown, treated as Pro) and writes `moonraker.asvc`.
+
+## Services
+
+The image's procd scripts start the stack's launchers in `/data/printer/bin`
+and do nothing while the stack is not installed:
+
+| Service | START | Runs |
+|---|---|---|
+| `mcu-wake` | 95 | `opencreator/mcu-wake.sh`: wakes a board Klippy cannot reach. |
+| `klipper` | 95 | Klippy with `config/printer.cfg`, log `logs/klippy.log`, socket `comms/klippy.sock`; `nice -n -20`. |
+| `moonraker` | 96 | Moonraker on port 7125 with `-d /data/printer_data`. |
+| `nginx` | 96 | The web interface and Moonraker's API and websocket on port 80. |
+| `grumpyscreen` | 97 | GrumpyScreen on the panel; it waits while a stick's installer holds the USB hook lock, and the stick's `runFirmwareExe.sh` stops it while the installer app owns the screen. |
+
+All but `grumpyscreen` respawn without limit (`respawn 3600 5 0`). Moonraker's
+`procd_cli` machine provider manages them; `moonraker.asvc` lists the names.
+There is no camera service.
+
+`moonraker.conf` (default from `stack/config/moonraker.conf`) trusts only
+private and link-local ranges (`10.0.0.0/8`, `127.0.0.0/8`,
+`169.254.0.0/16`, `172.16.0.0/12`, `192.168.0.0/16`, `FE80::/10`,
+`::1/128`) and has no `[update_manager]`: updates come from sticks.
+
+## Building it: tools/make-stack.sh
+
+`tools/make-stack.sh OUTDIR` (`build.md`) packs:
+
+- **OpenWrt packages** from the local `./build.sh`: every
+  `CONFIG_PACKAGE_*=m` of `config/openwrt.seed` and, through
+  `tools/ipk_closure.py`, every dependency not in the image's manifest
+  (`libc` and kernel excluded; a kernel module outside the image is an
+  error). Each ipk's `data.tar.gz` goes to `root/`; opkg `Alternatives`
+  become relative links (`/bin/stty` as `root/usr/bin/stty`).
+  `libsodium.so` is linked to the versioned library for libnacl.
+- **Downloads pinned in `stack/sources.txt`** (name, SHA-256, URL), cached
+  in `$WORK/stack-dl`: GrumpyScreen 0.0.3 (static), Fluidd v1.37.7,
+  Mainsail v2.19.0, and Moonraker's pure-Python dependencies the feeds
+  lack (`zipp`, `importlib_metadata`, `inotify_simple`, `libnacl`).
+  `streaming-form-data` 1.11.0 ships a generated `_parser.c`, compiled with
+  the OpenWrt toolchain; it needs neither Cython nor smart-open.
+  Moonraker's optional `apprise`, `ldap3`, `periphery`, `paho`, `msgspec`,
+  `uvloop`, `lmdb` and `preprocess_cancellation` are left out.
+- **Kalico** (`klippy`, `scripts`, `COPYING` of `HEAD`) with
+  `chelper/c_helper.so` compiled from `COMPILE_ARGS`/`SOURCE_FILES` of
+  `klippy/chelper/__init__.py` (without LTO if that fails) and touched
+  after, so Klippy does not rebuild it.
+- **Moonraker** (`moonraker`, `LICENSE` of `HEAD`), with the `procd_cli`
+  provider.
+- **opencreator-fs** (`HEAD`): `fs/usr/data/config` (without its
+  `moonraker.conf`) as `defaults/config`, `grumpyscreen.cfg`,
+  `08-mcu-wake.sh` as `opencreator/mcu-wake.sh` and `shaper_graph.py`,
+  with stock paths replaced:
+
+  | From | To |
+  |---|---|
+  | `/usr/data/opencreator/klipper/klippy-env/bin/python` | `/data/printer/bin/python3` |
+  | `/usr/data/opencreator/moonraker/shaper_graph.py` | `/data/printer/opencreator/shaper_graph.py` |
+  | `/usr/data/opencreator/klipper/config/` | `/data/printer_data/config/` |
+  | `/usr/data/firmwareRes/config/` | `/data/printer_data/config/calibration/` |
+  | `/usr/data/gcodes` | `/data/printer_data/gcodes` |
+  | `/usr/data/power_loss_recovery.json` | `/data/printer_data/power_loss_recovery.json` |
+
+  `grumpyscreen.cfg` loses the stock-only factory reset, switch to stock,
+  support zip and Wi-Fi restart commands; its restart, Klipper restart,
+  shutdown and thumbnail settings point at the services above.
+  `mcu-wake.sh` logs to `logs/mcu-wake.log` and follows `logs/klippy.log`.
+  OpenWrt's busybox `read` takes whole seconds only, so its `-t 0.2` and
+  `-t 0.05` become `-t 1`: a wake waits up to about 6 s of silence per
+  answer instead of 0.3 s, and is that much slower.
+  `shaper_graph.py` finds Kalico in `/data/printer/klipper/klippy`. The
+  build fails if any `/usr/data`, `/usr/prog`, `pellcorp` or stock init
+  script path is left.
+
+Only each checkout's `HEAD` is packed; uncommitted changes draw a warning.

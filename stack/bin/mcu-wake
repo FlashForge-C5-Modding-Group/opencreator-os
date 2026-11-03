@@ -1,0 +1,5 @@
+#!/bin/sh
+# Wakes MCU boards Klippy cannot reach, run by /etc/init.d/mcu-wake.
+# shellcheck source-path=SCRIPTDIR source=env.sh
+. "$(dirname "$0")/env.sh"
+exec sh "$P/opencreator/mcu-wake.sh"

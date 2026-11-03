@@ -34,7 +34,7 @@ class OpenWrtFixtureTest(unittest.TestCase):
         # Deliberately disagree with tracked executable modes, as on a Windows
         # checkout. The resulting image must recover Git modes, not lose crypto.
         self.files = {
-            "etc/init.d/c5-usb-hook": ("#!/bin/sh\nexit 0\n", 0o755),
+            "etc/init.d/c5-usb-hook": ("#!/bin/sh\nSTART=19\nexit 0\n", 0o755),
             "usr/libexec/c5-usb-hook": ("#!/bin/sh\nexit 0\n", 0o755),
             "usr/sbin/c5-check": ("#!/bin/sh\necho check\n", 0o755),
             "lib/c5/crypto.pem": ("test public key\n", 0o644),

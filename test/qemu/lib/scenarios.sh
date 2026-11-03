@@ -1281,8 +1281,54 @@ EOF
 	check "the stack's install.sh ran once" is_eq "$(res_out "$RUN/s19-next.res" runs | tr -d '\r')" "run mainsail Creator5Pro 0029"
 }
 
+# S20: the real stack (QEMU_STACK = a tools/make-stack.sh output directory)
+# installed headless with the default Fluidd: the services run, Moonraker
+# answers through nginx on port 80, every module the stack needs imports,
+# and Klippy starts (QEMU has no MCUs to connect to).
+scenario_S20() {
+	if [ -z "${QEMU_STACK:-}" ]; then
+		SKIP_WHY="QEMU_STACK not set (a tools/make-stack.sh output directory)"
+		return 77
+	fi
+	local p=$RUN/payload-s20 st=$RUN/s20-openwrt.steps
+	new_disk
+	make_payload "$p" --stack "$QEMU_STACK" || { fatal "make-install-stick.sh failed: $(tail -n 2 "$RUN/make-install-stick.log" | tr "\n" " ")"; return 0; }
+	make_stick "$p" "$RUN/stick-s20.img" 1024 || { fatal "make_stick failed"; return 1; }
+	printf 'expect 900 ^(QEMU-STOCK-DONE|QEMU-CHAINLOAD root=)|reboot: Restarting system\nwait-exit 240\n' > "$RUN/s20-stock.steps"
+	QEMU_BOOT_TIMEOUT=1500 boot s20-stock "$DISK" "$(spl_root "$DISK")" "$RUN/s20-stock.steps" "$RUN/stick-s20.img"
+	check "stock install jumped to root=$OWRT_ROOT" is_eq "$(boot_outcome s20-stock)" "chainload:$OWRT_ROOT"
+	check "the stack was planted with Fluidd" is_eq "$(c5os_cat "$DISK" /opencreator-os/stack/webui)" fluidd
+	# shellcheck disable=SC2016  # expanded in the guest
+	steps_openwrt "$st" <<EOF
+${STACK_WAIT/run 300 /run 1800 }
+run 600 moonraker i=0; until uclient-fetch -q -O - http://127.0.0.1:7125/server/info; do i=\$((i+1)); [ \$i -lt 600 ] || exit 1; sleep 1; done
+run 60 viaweb uclient-fetch -q -O - http://127.0.0.1/server/info
+run 60 index uclient-fetch -q -O - http://127.0.0.1/
+run 60 services ubus call service list
+run 120 imports /data/printer/bin/python3 -c 'import numpy, PIL, cffi, greenlet, jinja2, serial, tornado, streaming_form_data, libnacl, inotify_simple, dbus_fast, distro, importlib_metadata; print("imports ok")'
+run 60 klippylog grep -E "mcu 'mcu'|serial" /data/printer_data/logs/klippy.log
+run 30 read sh -c 'IFS= read -r -n 1 -t 1 c < /dev/null; echo "rc=\$?"'; grep -o 'read -r -n 1 -t [0-9.]*' /data/printer/opencreator/mcu-wake.sh | sort -u
+EOF
+	QEMU_BOOT_TIMEOUT=3600 boot_openwrt s20-openwrt "$DISK" "$(chainload_cmdline s20-stock)" "$st" "$RUN/stick-s20.img"
+	check "setup installed the stack" res_ok s20-openwrt stack
+	check "Moonraker answers on 7125" res_ok s20-openwrt moonraker
+	check "Moonraker answers through nginx on port 80" res_has s20-openwrt viaweb '"klippy_connected"'
+	check "nginx serves the Fluidd index" bash -c "printf '%s' \"\$1\" | grep -qi fluidd" _ "$(res_out "$RUN/s20-openwrt.res" index)"
+	check "procd runs klipper, moonraker, nginx and mcu-wake" python3 -c '
+import json, sys
+services = json.loads(sys.argv[1])
+for name in ("klipper", "moonraker", "nginx", "mcu-wake"):
+    instances = services.get(name, {}).get("instances", {})
+    if not any(i.get("running") for i in instances.values()):
+        sys.exit(f"{name} is not running")
+' "$(res_out "$RUN/s20-openwrt.res" services)"
+	check "every module the stack needs imports" res_has s20-openwrt imports '^imports ok'
+	check "Klippy ran and looked for its MCU" res_ok s20-openwrt klippylog
+	# busybox read takes whole seconds only: make-stack.sh ports mcu-wake.sh to -t 1
+	check "busybox read takes mcu-wake.sh's -t 1, and the port has no fractional -t" bash -c "o=\$(printf '%s' \"\$1\" | tr -d '\r'); printf '%s\n' \"\$o\" | grep -q '^rc=' && ! printf '%s\n' \"\$o\" | grep -qiE 'invalid|illegal' && printf '%s\n' \"\$o\" | grep -qx 'read -r -n 1 -t 1' && ! printf '%s\n' \"\$o\" | grep -q -- '-t [0-9]*\.'" _ "$(res_out "$RUN/s20-openwrt.res" read)"
+}
 
-ALL_SCENARIOS="S1 S2 S3 S4 S5 S6 S7 S8 S9 S10 S12 S13 S14 S15 S16 S17 S18 S19"
+ALL_SCENARIOS="S1 S2 S3 S4 S5 S6 S7 S8 S9 S10 S12 S13 S14 S15 S16 S17 S18 S19 S20"
 # the scenario whose image prepare_committed reuses (run.sh -j starts the
 # scenarios that call prepare_committed after it)
 COMMITTED_BY=S2
