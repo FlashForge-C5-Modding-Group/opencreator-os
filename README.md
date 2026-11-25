@@ -1,4 +1,5 @@
 # opencreator-os
+# DO NOT FLASH! VERY UNSAFE AND BASICALLY JUST HERE!
 
 OpenWrt-based replacement for stock Linux on the FlashForge Creator 5 and
 Creator 5 Pro (Ingenic X2600 host SoC). Installs in the spare eMMC boot slot,
